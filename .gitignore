@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.DS_Store
+results/*.log
+
+# local platform artifacts
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# secrets and local state
+.env
+.env.local
+deploy/.env
+supabase/.temp/
+supabase/.branches/
+*.tfvars
+.terraform/
+*.tfstate
+*.tfstate.*

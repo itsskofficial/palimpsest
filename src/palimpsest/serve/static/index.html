@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>palimpsest</title>
+<style>
+  :root {
+    --bg:#12100e; --panel:#1a1815; --panel2:#221f1b; --line:#302b25;
+    --ink:#f0ebe3; --dim:#9b9187; --dimmer:#6b635b;
+    --new:#6c9eff; --corr:#3ecf8e; --refine:#c9a227; --super:#e0873a;
+    --dup:#b07cd6; --extend:#5fb6c4; --contra:#ff5f56;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif}
+  a{color:var(--new);text-decoration:none}
+  header{display:flex;align-items:baseline;gap:16px;padding:16px 22px;
+    border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap;
+    position:sticky;top:0;z-index:10}
+  h1{font-size:16px;margin:0;letter-spacing:-.2px;font-weight:650}
+  h1 em{color:var(--dimmer);font-style:normal;font-weight:400;font-size:12px}
+  .meta{color:var(--dim);font-family:var(--mono);font-size:11.5px}
+  .grow{flex:1}
+  main{padding:18px 22px 80px;max-width:1180px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;margin-bottom:14px}
+  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+    margin:0 0 10px;font-weight:600}
+  textarea{width:100%;min-height:110px;background:var(--panel2);color:var(--ink);
+    border:1px solid var(--line);border-radius:8px;padding:11px 13px;font-family:inherit;
+    font-size:14px;resize:vertical}
+  textarea:focus{outline:none;border-color:var(--new)}
+  button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:7px 13px;font-size:12.5px;cursor:pointer;font-family:inherit}
+  button:hover:not(:disabled){border-color:var(--new);color:#fff}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:var(--new);border-color:var(--new);color:#08101f;font-weight:600}
+  button.good{background:var(--corr);border-color:var(--corr);color:#06110c;font-weight:600}
+  button.bad{border-color:var(--contra);color:var(--contra)}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+  .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button.on{background:var(--panel2);border-color:var(--new);color:#fff}
+  .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:10.5px;
+    font-weight:700;letter-spacing:.05em;font-family:var(--mono);text-transform:uppercase}
+  .new{background:rgba(108,158,255,.16);color:var(--new)}
+  .corroborates{background:rgba(62,207,142,.16);color:var(--corr)}
+  .refines{background:rgba(201,162,39,.18);color:var(--refine)}
+  .supersedes{background:rgba(224,135,58,.18);color:var(--super)}
+  .duplicate{background:rgba(176,124,214,.18);color:var(--dup)}
+  .extends{background:rgba(95,182,196,.18);color:var(--extend)}
+  .contradicts{background:rgba(255,95,86,.18);color:var(--contra)}
+  .op{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:9px;
+    background:var(--panel2)}
+  .op.picked{border-color:var(--new)}
+  .op-head{display:flex;gap:9px;align-items:center;margin-bottom:7px;flex-wrap:wrap}
+  .op-head .where{color:var(--dim);font-size:12px}
+  .diff{font-family:var(--mono);font-size:12px;line-height:1.6;white-space:pre-wrap;
+    word-break:break-word}
+  .add{color:var(--corr)} .del{color:var(--contra);text-decoration:line-through}
+  .ctx{color:var(--dimmer)}
+  .note{color:var(--dim);font-size:12.5px;line-height:1.6}
+  .note b{color:var(--ink);font-weight:600}
+  .warn{border-left:3px solid var(--contra);padding-left:11px;margin:9px 0}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--dim);font-weight:600;padding:6px 8px;
+    border-bottom:1px solid var(--line);white-space:nowrap;font-size:11px;
+    text-transform:uppercase;letter-spacing:.06em}
+  td{padding:7px 8px;border-bottom:1px solid rgba(48,43,37,.55);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .k{font-family:var(--mono);font-size:11.5px;color:var(--dimmer)}
+  .stat{display:inline-block;margin-right:20px}
+  .stat b{font-size:20px;font-weight:650;display:block;font-variant-numeric:tabular-nums}
+  .stat span{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  .busy{color:var(--refine)}
+  .hide{display:none}
+  .sim{font-family:var(--mono);color:var(--dim);font-size:11.5px}
+  input[type=text]{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:7px 11px;font-family:inherit;font-size:12.5px}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+    background:var(--panel2);border:1px solid var(--new);border-radius:8px;
+    padding:10px 18px;font-size:13px;z-index:50}
+</style>
+</head>
+<body>
+<header>
+  <h1>palimpsest <em id="ver"></em></h1>
+  <div class="meta" id="hdr">connecting…</div>
+  <div class="grow"></div>
+  <div class="meta" id="mode"></div>
+  <a href="/docs">api ↗</a>
+</header>
+
+<main>
+  <div class="tabs">
+    <button class="on" data-tab="add">Add</button>
+    <button data-tab="review">Review</button>
+    <button data-tab="sweeps">Sweeps</button>
+    <button data-tab="mirror">Mirror</button>
+  </div>
+
+  <!-- ============================ ADD ============================ -->
+  <section id="tab-add">
+    <div class="card">
+      <h2>Give it anything</h2>
+      <textarea id="spec" placeholder="Paste a URL, a YouTube link, a file path, or just type a note…&#10;&#10;https://arxiv.org/abs/2601.01828&#10;https://youtu.be/dQw4w9WgXcQ&#10;lecture.pdf&#10;Attention divides by sqrt(d_k) to keep gradient variance stable."></textarea>
+      <div class="bar">
+        <button class="primary" id="go">Extract &amp; propose</button>
+        <span class="note">Nothing is written to Notion until you accept it below.</span>
+        <span class="grow"></span>
+        <span class="meta busy" id="add-busy"></span>
+      </div>
+    </div>
+    <div id="add-result"></div>
+  </section>
+
+  <!-- =========================== REVIEW =========================== -->
+  <section id="tab-review" class="hide">
+    <div class="card">
+      <h2>Proposed patches</h2>
+      <div class="bar">
+        <input type="text" id="reviewer" placeholder="your name (recorded on every change)">
+        <button id="refresh-patches">Refresh</button>
+        <span class="meta busy" id="rev-busy"></span>
+      </div>
+    </div>
+    <div id="patches"></div>
+  </section>
+
+  <!-- =========================== SWEEPS =========================== -->
+  <section id="tab-sweeps" class="hide">
+    <div class="card">
+      <h2>Sweeps over the notes you already have</h2>
+      <div class="note">These read the mirror and change nothing. <b>Duplicates</b>,
+        <b>stale</b> and <b>questions</b> need no API key at all.</div>
+      <div class="bar">
+        <button data-sweep="duplicates">Duplicates</button>
+        <button data-sweep="contradictions">Contradictions</button>
+        <button data-sweep="stale">Stale</button>
+        <button data-sweep="questions">Open questions</button>
+        <span class="meta busy" id="sweep-busy"></span>
+      </div>
+    </div>
+    <div id="sweep-result"></div>
+  </section>
+
+  <!-- =========================== MIRROR =========================== -->
+  <section id="tab-mirror" class="hide">
+    <div class="card">
+      <h2>The mirror</h2>
+      <div id="mirror-stats" class="note">…</div>
+      <div class="bar">
+        <button class="primary" id="sync">Sync from Notion</button>
+        <button id="sync-full">Full re-sync</button>
+        <span class="meta busy" id="sync-busy"></span>
+      </div>
+      <div class="note" style="margin-top:9px">Incremental sync only refetches pages
+        whose <code>last_edited_time</code> moved. A full re-sync also detects pages
+        that disappeared.</div>
+    </div>
+    <div class="card">
+      <h2>Pages</h2>
+      <table id="pages"><tbody><tr><td class="note">Sync to populate.</td></tr></tbody></table>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let STATUS = {};
+
+function toast(msg) {
+  const el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, {
+    headers: {"Content-Type": "application/json"}, ...opts,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `${res.status} ${res.statusText}`);
+  return body;
+}
+
+// ---- tabs -----------------------------------------------------------------
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  ["add","review","sweeps","mirror"].forEach(t =>
+    $("#tab-" + t).classList.toggle("hide", t !== b.dataset.tab));
+  if (b.dataset.tab === "review") loadPatches();
+  if (b.dataset.tab === "mirror") loadPages();
+});
+
+// ---- status ---------------------------------------------------------------
+async function loadStatus() {
+  try {
+    STATUS = await api("/v1/status");
+    $("#ver").textContent = "v" + STATUS.version;
+    const s = STATUS.store || {};
+    $("#hdr").textContent =
+      `${s.pages||0} pages · ${s.blocks||0} blocks · ${s.sources||0} sources · ` +
+      `${s.pending_patches||0} pending`;
+    const c = STATUS.config || {};
+    $("#mode").textContent = c.apply
+      ? `APPLY ON · autonomy=${c.autonomy}` : "propose-only";
+    $("#mode").style.color = c.apply ? "var(--refine)" : "var(--dim)";
+    $("#mirror-stats").innerHTML =
+      `<span class="stat"><b>${s.pages||0}</b><span>pages</span></span>` +
+      `<span class="stat"><b>${s.blocks||0}</b><span>blocks</span></span>` +
+      `<span class="stat"><b>${s.provenance||0}</b><span>provenance rows</span></span>` +
+      `<span class="stat"><b>${s.applied_ops||0}</b><span>applied ops</span></span>` +
+      (STATUS.problems?.length
+        ? `<div class="warn note" style="margin-top:10px">` +
+          STATUS.problems.map(p => `! ${esc(p)}`).join("<br>") + `</div>` : "");
+  } catch (e) { $("#hdr").textContent = "error: " + e.message; }
+}
+
+// ---- add ------------------------------------------------------------------
+$("#go").onclick = async () => {
+  const spec = $("#spec").value.trim();
+  if (!spec) return;
+  $("#go").disabled = true;
+  $("#add-busy").textContent = "extracting → retrieving → classifying…";
+  $("#add-result").innerHTML = "";
+  try {
+    const looksLikeRef = /^(https?:\/\/|[\w./\\~-]+\.\w{2,5}$)/i.test(spec);
+    const r = await api("/v1/ingest", {
+      method: "POST",
+      body: JSON.stringify(looksLikeRef ? {spec} : {text: spec}),
+    });
+    renderIngest(r);
+    loadStatus();
+  } catch (e) {
+    $("#add-result").innerHTML =
+      `<div class="card"><div class="warn note">${esc(e.message)}</div></div>`;
+  } finally {
+    $("#go").disabled = false; $("#add-busy").textContent = "";
+  }
+};
+
+function relCounts(byRel) {
+  return Object.entries(byRel || {}).map(([k, v]) =>
+    `<span class="pill ${k}">${v} ${k}</span>`).join(" ");
+}
+
+function renderIngest(r) {
+  const p = r.patch || {};
+  const cost = r.usage?.estimated_cost_usd;
+  let html = `<div class="card">
+    <h2>${esc(r.source.title)}</h2>
+    <div class="note">${esc(r.source.kind)} · ${r.source.chars} chars ·
+      ${r.claims} claim(s) · ${r.seconds}s${cost != null ? ` · ~$${cost.toFixed(3)}` : ""}
+      ${r.reused ? " · <b>reused an earlier ingestion</b>" : ""}</div>
+    <div class="bar">${relCounts(p.by_relation)}</div>
+  </div>`;
+  if (p.patch_id) html += renderPatch(p, true);
+  if (r.review?.length) {
+    html += `<div class="card"><h2>Needs you (${r.review.length})</h2>` +
+      r.review.map(item => `
+        <div class="op">
+          <div class="op-head">
+            <span class="pill ${item.judgement.relation}">${item.judgement.relation}</span>
+            <span class="where">${esc(item.page || "")} · ${esc(item.reason)}</span>
+          </div>
+          <div class="diff"><span class="add">+ ${esc(item.claim.text)}</span></div>
+          ${item.existing_text ? `<div class="diff ctx">existing: ${esc(item.existing_text)}</div>` : ""}
+          <div class="note" style="margin-top:6px">${esc(item.judgement.rationale)}</div>
+        </div>`).join("") + `</div>`;
+  }
+  $("#add-result").innerHTML = html;
+  wirePatchButtons();
+}
+
+// ---- patches --------------------------------------------------------------
+function opDiff(op) {
+  const p = op.payload || {};
+  switch (op.kind) {
+    case "add_citation":
+      return `<div class="diff"><span class="ctx">existing block gains</span>
+        <span class="add">[${esc(p.label)}]</span>
+        <span class="ctx">— no prose added</span></div>`;
+    case "update_text":
+      return `<div class="diff"><span class="add">→ ${esc(p.text)}</span></div>`;
+    case "strike_block":
+      return `<div class="diff"><span class="del">${esc(p.text)}</span></div>`;
+    case "append_block":
+      return `<div class="diff"><span class="add">+ ${esc(p.text || "(citation)")}</span></div>`;
+    case "insert_footnote":
+      return `<div class="diff ctx">📎 ${esc(p.text)} — ${esc(p.source_title)}</div>`;
+    case "create_page":
+      return `<div class="diff"><span class="add">+ new page “${esc(p.title)}”</span></div>`;
+    case "link_pages":
+      return `<div class="diff"><span class="add">↔ ${esc(p.label)}</span></div>`;
+    default:
+      return `<div class="diff ctx">${esc(op.kind)}</div>`;
+  }
+}
+
+function renderPatch(p, inline) {
+  const ops = (p.operations || []).map(op => `
+    <div class="op picked" data-op="${op.op_id}">
+      <div class="op-head">
+        <input type="checkbox" checked data-pick="${op.op_id}">
+        <span class="pill ${op.relation || "new"}">${op.relation || "op"}</span>
+        <span class="where k">${esc(op.kind)} · ${esc((op.target||"").slice(0,8))}</span>
+      </div>
+      ${opDiff(op)}
+    </div>`).join("");
+  return `<div class="card" data-patch="${p.patch_id}">
+    <h2>Patch ${esc(p.patch_id)} · ${(p.operations||[]).length} operation(s)</h2>
+    <div class="bar">${relCounts(p.by_relation)}</div>
+    ${ops || '<div class="note">Nothing to apply.</div>'}
+    <div class="bar">
+      <button class="good" data-act="apply" data-patch="${p.patch_id}">Accept &amp; write to Notion</button>
+      <button data-act="dry" data-patch="${p.patch_id}">Dry run</button>
+      <button class="bad" data-act="reject" data-patch="${p.patch_id}">Reject</button>
+      <button data-act="undo" data-patch="${p.patch_id}">Undo</button>
+      <span class="meta busy" data-busy="${p.patch_id}"></span>
+    </div>
+  </div>`;
+}
+
+function wirePatchButtons() {
+  document.querySelectorAll("[data-pick]").forEach(cb => cb.onchange = () =>
+    cb.closest(".op").classList.toggle("picked", cb.checked));
+
+  document.querySelectorAll("[data-act]").forEach(btn => btn.onclick = async () => {
+    const id = btn.dataset.patch, act = btn.dataset.act;
+    const reviewer = $("#reviewer").value.trim() || "me";
+    const busy = document.querySelector(`[data-busy="${id}"]`);
+    const card = document.querySelector(`[data-patch="${id}"]`);
+    const picked = [...card.querySelectorAll("[data-pick]")]
+      .filter(cb => cb.checked).map(cb => cb.dataset.pick);
+    busy.textContent = "working…";
+    try {
+      let r;
+      if (act === "reject") {
+        r = await api(`/v1/patches/${id}/reject`, {
+          method: "POST", body: JSON.stringify({reviewer})});
+        toast("rejected — nothing was written");
+      } else if (act === "undo") {
+        r = await api(`/v1/patches/${id}/undo`, {
+          method: "POST", body: JSON.stringify({reviewer})});
+        toast(`undone: ${r.applied} operation(s) reverted`);
+      } else {
+        r = await api(`/v1/patches/${id}/apply`, {
+          method: "POST",
+          body: JSON.stringify({reviewer, dry_run: act === "dry", operations: picked}),
+        });
+        toast(act === "dry"
+          ? `dry run OK: ${r.applied} operation(s) would apply`
+          : `applied ${r.applied} operation(s)${r.failed ? `, ${r.failed} failed` : ""}`);
+        if (r.errors?.length) toast(r.errors[0]);
+      }
+      loadStatus();
+    } catch (e) { toast("error: " + e.message); }
+    finally { busy.textContent = ""; }
+  });
+}
+
+async function loadPatches() {
+  $("#rev-busy").textContent = "loading…";
+  try {
+    const {patches} = await api("/v1/patches?status=proposed&limit=25");
+    if (!patches.length) {
+      $("#patches").innerHTML =
+        `<div class="card"><div class="note">No proposed patches. Add something on the
+         <b>Add</b> tab.</div></div>`;
+    } else {
+      const full = await Promise.all(patches.map(p => api(`/v1/patches/${p.patch_id}`)));
+      $("#patches").innerHTML = full.map(p => renderPatch(p)).join("");
+      wirePatchButtons();
+    }
+  } catch (e) { $("#patches").innerHTML = `<div class="card note">${esc(e.message)}</div>`; }
+  finally { $("#rev-busy").textContent = ""; }
+}
+$("#refresh-patches").onclick = loadPatches;
+
+// ---- sweeps ---------------------------------------------------------------
+document.querySelectorAll("[data-sweep]").forEach(b => b.onclick = async () => {
+  const kind = b.dataset.sweep;
+  $("#sweep-busy").textContent = `running ${kind}…`;
+  $("#sweep-result").innerHTML = "";
+  try {
+    const r = await api(`/v1/sweep/${kind}`, {method: "POST", body: "{}"});
+    $("#sweep-result").innerHTML = renderSweep(r);
+  } catch (e) {
+    $("#sweep-result").innerHTML = `<div class="card"><div class="warn note">${esc(e.message)}</div></div>`;
+  } finally { $("#sweep-busy").textContent = ""; }
+});
+
+function renderSweep(r) {
+  const head = `<div class="card"><h2>${esc(r.kind)}</h2>
+    <div class="note">${r.findings.length} finding(s) over ${r.scanned} item(s)
+      · ${r.seconds}s${r.model_calls ? ` · ${r.model_calls} model call(s)` : ""}</div>
+    ${(r.notes||[]).map(n => `<div class="note">— ${esc(n)}</div>`).join("")}</div>`;
+  if (!r.findings.length) return head;
+
+  if (r.kind === "duplicates" || r.kind === "contradictions") {
+    return head + `<div class="card">` + r.findings.map(f => `
+      <div class="op">
+        <div class="op-head">
+          <span class="pill ${r.kind === "duplicates" ? "duplicate" : "contradicts"}">
+            ${r.kind === "duplicates" ? "duplicate" : esc(f.kind)}</span>
+          <span class="sim">similarity ${f.similarity}${
+            f.confidence != null ? ` · confidence ${f.confidence}` : ""}</span>
+        </div>
+        ${f.explanation ? `<div class="note" style="margin-bottom:7px">${esc(f.explanation)}</div>` : ""}
+        <div class="diff ctx"><b>${esc(f.a.page_title)}</b> — ${esc(f.a.text)}</div>
+        <div class="diff ctx" style="margin-top:6px"><b>${esc(f.b.page_title)}</b> — ${esc(f.b.text)}</div>
+        ${f.suggestion ? `<div class="note" style="margin-top:7px">→ ${esc(f.suggestion)}</div>` : ""}
+      </div>`).join("") + `</div>`;
+  }
+  return head + `<div class="card"><table><thead><tr>
+      <th>Page</th><th>Text</th>${r.kind === "stale" ? "<th>Age</th><th>Staleness</th>" : ""}
+    </tr></thead><tbody>` + r.findings.map(f => `<tr>
+      <td>${esc(f.page_title)}</td><td>${esc(f.text)}</td>
+      ${r.kind === "stale" ? `<td class="k">${f.age_days}d</td><td class="k">${f.staleness}×</td>` : ""}
+    </tr>`).join("") + `</tbody></table></div>`;
+}
+
+// ---- mirror ---------------------------------------------------------------
+async function doSync(incremental) {
+  $("#sync-busy").textContent = "syncing…";
+  try {
+    const r = await api("/v1/sync", {
+      method: "POST", body: JSON.stringify({incremental})});
+    toast(`${r.pages} page(s), ${r.blocks} block(s) in ${r.seconds}s`);
+    if (r.errors?.length) toast(r.errors[0]);
+    loadStatus(); loadPages();
+  } catch (e) { toast("error: " + e.message); }
+  finally { $("#sync-busy").textContent = ""; }
+}
+$("#sync").onclick = () => doSync(true);
+$("#sync-full").onclick = () => doSync(false);
+
+async function loadPages() {
+  try {
+    const {pages} = await api("/v1/pages?limit=200");
+    $("#pages").innerHTML = pages.length
+      ? `<thead><tr><th>Title</th><th>Role</th><th>Edited</th></tr></thead><tbody>` +
+        pages.map(p => `<tr><td>${p.url ? `<a href="${esc(p.url)}" target="_blank">${esc(p.title)}</a>` : esc(p.title)}</td>
+          <td class="k">${esc(p.role || "")}</td>
+          <td class="k">${esc((p.last_edited || "").slice(0, 10))}</td></tr>`).join("") +
+        `</tbody>`
+      : `<tbody><tr><td class="note">Nothing mirrored yet. Press <b>Sync from Notion</b>.</td></tr></tbody>`;
+  } catch (e) { /* the tab may not be open */ }
+}
+
+loadStatus();
+setInterval(loadStatus, 15000);
+</script>
+</body>
+</html>

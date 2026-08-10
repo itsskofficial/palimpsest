@@ -1,0 +1,99 @@
+# The palimpsest containers, against Supabase.
+#
+#   python scripts/dev.py up                            # start Supabase + migrate
+#   docker compose -f deploy/docker-compose.yml up --build
+#   open http://localhost:8100
+#
+# **The database is Supabase, not a plain Postgres in this file.** Local Supabase (from
+# `supabase start`) is the same Postgres, the same pgBouncer, the same Storage API and
+# the same RLS as the cloud project you will deploy against — so the only thing that
+# changes on the way to AWS is credentials. A `postgres:16` service here would be a
+# different thing wearing the same name, and every Supabase-specific problem would go
+# undetected until deploy day.
+#
+# On Linux, replace `host.docker.internal` with `172.17.0.1` or run `--network host`.
+#
+# To point at Supabase Cloud instead, put these in `deploy/.env`:
+#   PALIMPSEST_DATABASE_URL=postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:6543/postgres
+#   SUPABASE_URL=https://<ref>.supabase.co
+#   SUPABASE_SERVICE_ROLE_KEY=<service role key>
+
+name: palimpsest
+
+x-env: &env
+  # Defaults are the local stack on palimpsest's own 545xx ports.
+  PALIMPSEST_DATABASE_URL: ${PALIMPSEST_DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:54522/postgres}
+  SUPABASE_URL: ${SUPABASE_URL:-http://host.docker.internal:54521}
+  SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU}
+  PALIMPSEST_ARTIFACT_URL: ${PALIMPSEST_ARTIFACT_URL:-supabase://palimpsest-archive/palimpsest}
+  PALIMPSEST_ENV: ${PALIMPSEST_ENV:-compose}
+  # Permission to write. Off unless you say otherwise, in both places.
+  PALIMPSEST_APPLY: ${PALIMPSEST_APPLY:-0}
+  PALIMPSEST_AUTONOMY: ${PALIMPSEST_AUTONOMY:-none}
+  # Keys for the things with no local equivalent.
+  NOTION_TOKEN: ${NOTION_TOKEN:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
+  PALIMPSEST_NOTION_ROOTS: ${PALIMPSEST_NOTION_ROOTS:-}
+
+x-build: &build
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  # Migrations run once, in their own container, before anything serves. N replicas
+  # racing `CREATE TABLE` is silent and partial; a failed migration here fails loudly
+  # instead of leaving one task serving against a half-built schema.
+  migrate:
+    <<: *build
+    environment: *env
+    command: ["palimpsest", "db", "migrate"]
+    restart: "no"
+
+  app:
+    <<: *build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${PALIMPSEST_PORT:-8100}:8100"
+    environment:
+      <<: *env
+      # Reachable only from this host, so no key is required. Set one the moment it is
+      # reachable from anywhere else — the app refuses to bind publicly without it.
+      PALIMPSEST_API_KEY: ${PALIMPSEST_API_KEY:-}
+      PALIMPSEST_ALLOW_INSECURE: ${PALIMPSEST_ALLOW_INSECURE:-1}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8100/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # One-shot: pull Notion into the mirror.
+  #   docker compose -f deploy/docker-compose.yml run --rm sync
+  sync:
+    <<: *build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment: *env
+    command: ["palimpsest", "sync", "--quiet"]
+    profiles: ["tools"]
+    restart: "no"
+
+  # The scheduled sweep. Reads and reports; writes nothing.
+  #   docker compose -f deploy/docker-compose.yml --profile tools run --rm sweep
+  sweep:
+    <<: *build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment: *env
+    command: ["palimpsest", "sweep", "duplicates"]
+    profiles: ["tools"]
+    restart: "no"
