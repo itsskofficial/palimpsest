@@ -45,21 +45,43 @@ _SKIP = frozenset({"script", "style", "noscript", "svg", "head", "nav", "footer"
 _BLOCK = frozenset({"p", "div", "section", "article", "li", "tr", "br", "h1", "h2",
                     "h3", "h4", "h5", "h6", "blockquote", "pre", "table"})
 
+#: Elements with no closing tag. Pushing these onto the open-element stack would leave
+#: it permanently unbalanced, which is the same failure this stack exists to prevent.
+_VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+                   "meta", "param", "source", "track", "wbr"})
+
 
 class _Reader(HTMLParser):
-    """A deliberately small HTML-to-text pass. Keeps headings, drops chrome."""
+    """A deliberately small HTML-to-text pass. Keeps headings, drops chrome.
+
+    **Skipping tracks an element stack, not a depth counter.** The counter is the
+    obvious implementation and it is quietly catastrophic on real markup: HTML5 lets a
+    container close its unclosed children implicitly, so a page with
+
+        <aside><nav>…<nav>…<nav>…</aside>
+
+    is perfectly valid and renders fine, but `HTMLParser` reports three opens and no
+    matching closes. A counter never returns to zero and every word after that point is
+    dropped — the page comes back nearly empty, with no error to explain it. Popping the
+    stack down to the matching open reproduces what a browser does.
+
+    Found on go.dev, which is static HTML: it returned 40 characters.
+    """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.title = ""
-        self._skip_depth = 0
+        self._open: list[str] = []
+        self._skipping = 0
         self._in_title = False
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in _SKIP:
-            self._skip_depth += 1
-        elif tag == "title":
+        if tag not in _VOID:
+            self._open.append(tag)
+            if tag in _SKIP:
+                self._skipping += 1
+        if tag == "title":
             self._in_title = True
         elif tag in _BLOCK:
             self.parts.append("\n")
@@ -67,20 +89,26 @@ class _Reader(HTMLParser):
                 self.parts.append("\n" + "#" * int(tag[1]) + " ")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in _SKIP and self._skip_depth:
-            self._skip_depth -= 1
-        elif tag == "title":
+        if tag in self._open:
+            # Everything above the matching open was left unclosed; the browser would
+            # have closed it here, so we do too.
+            cut = len(self._open) - 1 - self._open[::-1].index(tag)
+            for stranded in self._open[cut:]:
+                if stranded in _SKIP:
+                    self._skipping -= 1
+            del self._open[cut:]
+        if tag == "title":
             self._in_title = False
         elif tag in _BLOCK:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
         # The title check comes first: `<title>` lives inside `<head>`, which is in
-        # _SKIP, so testing the skip depth first means no page ever yields a title.
+        # _SKIP, so testing the skip state first means no page ever yields a title.
         if self._in_title:
             self.title += data.strip()
             return
-        if self._skip_depth:
+        if self._skipping:
             return
         text = data.strip()
         if text:

@@ -50,6 +50,11 @@ anthropic = ["anthropic>=0.69"]
 # Optional dense retrieval on top of the built-in lexical index.
 embed = ["openai>=1.30"]
 
+# The agent: observability. The agent loop, tools, gate and memory are all standard
+# library over the existing model layer — only tracing needs a package, and it degrades
+# to a no-op when the keys or the import are absent.
+agent = ["langfuse>=3.0"]
+
 # Ingestion adapters that need more than urllib.
 firecrawl = ["firecrawl-py>=2.0"]
 pdf = ["pypdf>=4.2"]
@@ -72,8 +77,9 @@ dev = [
     "python-multipart>=0.0.9",
     "psycopg2-binary>=2.9",
     "anthropic>=0.69",
+    "langfuse>=3.0",
 ]
-all = ["palimpsest[anthropic,embed,pdf,tabular,serve,postgres,aws]"]
+all = ["palimpsest[anthropic,embed,pdf,tabular,serve,postgres,aws,agent]"]
 
 [project.urls]
 Homepage = "https://github.com/itsskofficial/palimpsest"
@@ -129,6 +135,11 @@ type = "layers"
 layers = [
     "palimpsest.cli",
     "palimpsest.serve",
+    "palimpsest.telegram",
+    "palimpsest.agent",
+    "palimpsest.evals",
+    "palimpsest.jobs",
+    "palimpsest.organise",
     "palimpsest.sweep",
     "palimpsest.pipeline",
     "palimpsest.plan",
@@ -136,8 +147,10 @@ layers = [
     "palimpsest.retrieve",
     "palimpsest.extract",
     "palimpsest.ingest",
+    "palimpsest.approval",
     "palimpsest.notion",
     "palimpsest.llm",
+    "palimpsest.trace",
     "palimpsest.store",
     "palimpsest.types",
 ]
@@ -155,8 +168,15 @@ source_modules = [
     "palimpsest.plan",
     "palimpsest.extract",
     "palimpsest.sweep",
+    # `organise` proposes structural change and must not perform it. It emits a patch
+    # like every other planner; `jobs`, `approval` and `serve` decide whether it applies.
+    "palimpsest.organise",
 ]
-forbidden_modules = ["palimpsest.notion.apply"]
+# `journal` also writes to Notion, so it lives behind the same door. `approval` is the
+# gate that lets writes through — a planner that could import it could route around the
+# gate, so it is forbidden here too. Three names, one door.
+forbidden_modules = ["palimpsest.notion.apply", "palimpsest.notion.journal",
+                     "palimpsest.approval"]
 
 # 3. The library must never depend on the web layer.
 [[tool.importlinter.contracts]]
@@ -174,6 +194,9 @@ source_modules = [
     "palimpsest.plan",
     "palimpsest.pipeline",
     "palimpsest.sweep",
+    "palimpsest.organise",
+    "palimpsest.jobs",
+    "palimpsest.telegram",
 ]
 forbidden_modules = ["palimpsest.serve", "fastapi", "uvicorn", "starlette"]
 
@@ -192,4 +215,5 @@ source_modules = [
     "palimpsest.store.stats",
     "palimpsest.store.migrations",
 ]
-forbidden_modules = ["anthropic", "openai", "fastapi", "psycopg2", "numpy", "firecrawl"]
+forbidden_modules = ["anthropic", "openai", "fastapi", "psycopg2", "numpy", "firecrawl",
+                     "langfuse"]

@@ -467,6 +467,247 @@ class PostgresStore:
             cur.execute(sql, params)
             return [dict(r) for r in cur.fetchall()]
 
+    # -- the agent: sessions, messages, memory ---------------------------------
+
+    def upsert_session(self, session: dict) -> str:
+        now = time.time()
+        with self._cur(dict_rows=False) as cur:
+            cur.execute(
+                "INSERT INTO agent_sessions (session_id, chat_id, surface, summary, "
+                "token_count, started_at, last_active) VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(session_id) DO UPDATE SET summary=excluded.summary, "
+                "token_count=excluded.token_count, last_active=excluded.last_active",
+                (session["session_id"], session.get("chat_id"),
+                 session.get("surface", "telegram"), session.get("summary", ""),
+                 int(session.get("token_count", 0)), session.get("started_at", now), now))
+        return session["session_id"]
+
+    def get_session_for_chat(self, chat_id: str) -> dict | None:
+        with self._cur() as cur:
+            cur.execute("SELECT * FROM agent_sessions WHERE chat_id=%s "
+                        "ORDER BY last_active DESC LIMIT 1", (str(chat_id),))
+            r = cur.fetchone()
+            return dict(r) if r else None
+
+    def add_message(self, session_id: str, role: str, content: Any,
+                    trace_id: str | None = None) -> None:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute("INSERT INTO agent_messages (session_id, role, content, "
+                        "trace_id, created_at) VALUES (%s,%s,%s,%s,%s)",
+                        (session_id, role, self._json(_plain(content)), trace_id,
+                         time.time()))
+
+    def get_messages(self, session_id: str, limit: int = 100) -> list[dict]:
+        with self._cur() as cur:
+            cur.execute("SELECT role, content, trace_id, created_at FROM agent_messages "
+                        "WHERE session_id=%s ORDER BY id DESC LIMIT %s",
+                        (session_id, limit))
+            out = [dict(r) for r in cur.fetchall()]
+        out.reverse()
+        return out
+
+    def put_memory(self, kind: str, key: str, value: str, *, confidence: float = 1.0,
+                   source: str | None = None) -> None:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute(
+                "INSERT INTO agent_memory (kind, key, value, confidence, source, "
+                "updated_at) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT(kind, key) DO UPDATE "
+                "SET value=excluded.value, confidence=excluded.confidence, "
+                "source=excluded.source, updated_at=excluded.updated_at",
+                (kind, key, value, confidence, source, time.time()))
+
+    def get_memories(self, kind: str | None = None, limit: int = 200) -> list[dict]:
+        sql = "SELECT * FROM agent_memory"
+        params: list[Any] = []
+        if kind:
+            sql += " WHERE kind=%s"
+            params.append(kind)
+        sql += " ORDER BY updated_at DESC LIMIT %s"
+        params.append(limit)
+        with self._cur() as cur:
+            cur.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+
+    def delete_memory(self, kind: str, key: str) -> None:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute("DELETE FROM agent_memory WHERE kind=%s AND key=%s", (kind, key))
+
+    # -- the agent: the approval gate ------------------------------------------
+
+    def put_approval(self, approval: dict) -> str:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute(
+                "INSERT INTO approvals (approval_id, patch_id, session_id, chat_id, "
+                "operation_ids, kind, status, summary, requested_at, resolved_at, "
+                "resolved_by, expires_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(approval_id) DO UPDATE SET status=excluded.status, "
+                "resolved_at=excluded.resolved_at, resolved_by=excluded.resolved_by",
+                (approval["approval_id"], approval["patch_id"], approval.get("session_id"),
+                 approval.get("chat_id"), self._json(_plain(approval.get("operation_ids", []))),
+                 approval.get("kind", "apply"), approval.get("status", "pending"),
+                 approval.get("summary"), approval.get("requested_at", time.time()),
+                 approval.get("resolved_at"), approval.get("resolved_by"),
+                 approval.get("expires_at")))
+        return approval["approval_id"]
+
+    def get_approval(self, approval_id: str) -> dict | None:
+        with self._cur() as cur:
+            cur.execute("SELECT * FROM approvals WHERE approval_id=%s", (approval_id,))
+            r = cur.fetchone()
+            return dict(r) if r else None
+
+    def list_approvals(self, status: str | None = "pending",
+                       limit: int = 50) -> list[dict]:
+        sql = "SELECT * FROM approvals"
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status=%s"
+            params.append(status)
+        sql += " ORDER BY requested_at DESC LIMIT %s"
+        params.append(limit)
+        with self._cur() as cur:
+            cur.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+
+    def resolve_approval(self, approval_id: str, status: str, by: str | None) -> None:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute("UPDATE approvals SET status=%s, resolved_at=%s, resolved_by=%s "
+                        "WHERE approval_id=%s", (status, time.time(), by, approval_id))
+
+    def expire_approvals(self, now: float | None = None) -> int:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute("UPDATE approvals SET status='expired' WHERE status='pending' "
+                        "AND expires_at IS NOT NULL AND expires_at < %s",
+                        (now or time.time(),))
+            return int(cur.rowcount or 0)
+
+    # -- the agent: eval storage -----------------------------------------------
+
+    def put_eval_example(self, example: dict) -> str:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute(
+                "INSERT INTO eval_examples (id, suite, input, expected, label_source, "
+                "labelled_by, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(id) DO UPDATE SET input=excluded.input, "
+                "expected=excluded.expected",
+                (example["id"], example.get("suite", "relation"),
+                 self._json(_plain(example["input"])), self._json(_plain(example["expected"])),
+                 example.get("label_source", "human"), example.get("labelled_by"),
+                 example.get("created_at", time.time())))
+        return example["id"]
+
+    def get_eval_examples(self, suite: str | None = None,
+                          limit: int = 1000) -> list[dict]:
+        sql = "SELECT * FROM eval_examples"
+        params: list[Any] = []
+        if suite:
+            sql += " WHERE suite=%s"
+            params.append(suite)
+        sql += " ORDER BY created_at LIMIT %s"
+        params.append(limit)
+        with self._cur() as cur:
+            cur.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+
+    def put_eval_run(self, run: dict) -> str:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute(
+                "INSERT INTO eval_runs (run_id, suite, model, scores, passed, created_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT(run_id) DO NOTHING",
+                (run["run_id"], run["suite"], run.get("model"),
+                 self._json(_plain(run.get("scores", {}))), bool(run.get("passed")),
+                 run.get("created_at", time.time())))
+        return run["run_id"]
+
+    def get_eval_runs(self, suite: str | None = None, limit: int = 20) -> list[dict]:
+        sql = "SELECT * FROM eval_runs"
+        params: list[Any] = []
+        if suite:
+            sql += " WHERE suite=%s"
+            params.append(suite)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        params.append(limit)
+        with self._cur() as cur:
+            cur.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+
+    # -- the capture queue -----------------------------------------------------
+
+    def put_job(self, job: dict) -> str:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute(
+                "INSERT INTO jobs (job_id, kind, spec, source_kind, title, url, origin, "
+                "status, patch_id, result, error, attempts, created_at, started_at, "
+                "finished_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (job_id) DO UPDATE SET status=excluded.status, "
+                "result=excluded.result, error=excluded.error, patch_id=excluded.patch_id, "
+                "finished_at=excluded.finished_at",
+                (job["job_id"], job.get("kind", "ingest"), job.get("spec", ""),
+                 job.get("source_kind"), job.get("title"), job.get("url"),
+                 job.get("origin"), job.get("status", "queued"), job.get("patch_id"),
+                 self._json(_plain(job["result"])) if job.get("result") is not None else None,
+                 job.get("error"), int(job.get("attempts", 0)),
+                 job.get("created_at", time.time()), job.get("started_at"),
+                 job.get("finished_at")),
+            )
+        return job["job_id"]
+
+    def get_job(self, job_id: str) -> dict | None:
+        with self._cur() as cur:
+            cur.execute("SELECT * FROM jobs WHERE job_id=%s", (job_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def list_jobs(self, status: str | None = None, limit: int = 50) -> list[dict]:
+        sql = "SELECT * FROM jobs"
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status=%s"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        params.append(limit)
+        with self._cur() as cur:
+            cur.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+
+    def claim_job(self) -> dict | None:
+        """Atomically take the oldest queued job.
+
+        `FOR UPDATE SKIP LOCKED` is the Postgres way to do this: concurrent workers each
+        take a different row instead of queueing behind the same one. It is also why
+        this store can back more than one process, which the SQLite one cannot.
+        """
+        with self._cur() as cur:
+            cur.execute(
+                "UPDATE jobs SET status='running', started_at=%s, attempts=attempts+1 "
+                "WHERE job_id = (SELECT job_id FROM jobs WHERE status='queued' "
+                "ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *",
+                (time.time(),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def finish_job(self, job_id: str, status: str, *, result: dict | None = None,
+                   error: str | None = None, patch_id: str | None = None) -> None:
+        with self._cur(dict_rows=False) as cur:
+            cur.execute(
+                "UPDATE jobs SET status=%s, result=%s, error=%s, "
+                "patch_id=COALESCE(%s, patch_id), finished_at=%s WHERE job_id=%s",
+                (status, self._json(_plain(result)) if result is not None else None,
+                 error, patch_id, time.time(), job_id),
+            )
+
+    def requeue_stale_jobs(self) -> int:
+        """Put jobs that were `running` when the process died back on the queue."""
+        with self._cur(dict_rows=False) as cur:
+            cur.execute("UPDATE jobs SET status='queued', started_at=NULL "
+                        "WHERE status='running' AND attempts < 3")
+            n = cur.rowcount or 0
+            cur.execute("UPDATE jobs SET status='failed', "
+                        "error='abandoned after 3 attempts', finished_at=%s "
+                        "WHERE status='running' AND attempts >= 3", (time.time(),))
+        return int(n)
+
     # -- lifecycle -------------------------------------------------------------
 
     def stats(self) -> StoreStats:
@@ -477,6 +718,8 @@ class PostgresStore:
                 out[t] = int(cur.fetchone()[0])
             cur.execute("SELECT COUNT(*) FROM patches WHERE status='proposed'")
             out["pending_patches"] = int(cur.fetchone()[0])
+            cur.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')")
+            out["queued_jobs"] = int(cur.fetchone()[0])
         return out
 
     def truncate_all(self) -> None:

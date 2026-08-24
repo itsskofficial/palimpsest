@@ -196,14 +196,21 @@ def citation_marker(label: str, url: str | None = None) -> list[dict]:
 
 
 def footnote_block(text: str, source_title: str, locator: str | None = None,
-                   url: str | None = None) -> dict:
-    """The collapsed provenance note that sits under an edited block."""
+                   url: str | None = None, why: str | None = None) -> dict:
+    """The provenance note that sits under an edited block.
+
+    `why` is the classifier's reasoning, and it is here rather than only in the ledger
+    because of when the question gets asked. Nobody runs `palimpsest provenance` on a
+    block; they are reading the page, six months later, wondering why it says that. The
+    answer has to be on the page, next to the sentence, or it may as well not exist.
+    """
     bits = [source_title]
     if locator:
         bits.append(locator)
     tail = " · ".join(b for b in bits if b)
-    return callout(f"{text} — {tail}" if text else tail, icon="📎",
-                   color="gray_background", link=url)
+    head = f"{text} — {tail}" if text else tail
+    body = f"{head}\n{why}" if why else head
+    return callout(body, icon="📎", color="gray_background", link=url)
 
 
 def text_payload(block_type: str, text: str, **kw) -> dict:

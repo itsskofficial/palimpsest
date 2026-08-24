@@ -23,6 +23,7 @@ without one.
 from __future__ import annotations
 
 import logging
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,10 @@ class AppState:
         self._index_blocks = -1
         self._model = None
         self._notion = None
+        self._journal = None
+        self._queue = None
+        self._bot = None
+        self.uploads = Path(tempfile.gettempdir()) / "palimpsest-uploads"
 
     # -- lazily-built shared objects -------------------------------------------
 
@@ -98,6 +103,84 @@ class AppState:
                                         version=self.settings.notion_version)
         return self._notion
 
+    @property
+    def journal(self):
+        """The Notion-side ledger. Shares the client the apply routes already use."""
+        from palimpsest.notion.journal import Journal
+
+        if self._journal is None:
+            roots = self.settings.notion_root_pages
+            self._journal = Journal(self.notion, self.store,
+                                    roots[0] if roots else None,
+                                    enabled=self.settings.journal)
+        return self._journal
+
+    @property
+    def queue(self):
+        """The capture queue, started on first use.
+
+        Every factory here builds a *new* object per call, on purpose. Workers run on
+        their own threads, and a SQLite connection shared across threads is the classic
+        way to turn a working local app into one that fails under exactly the load it
+        was built for — several files dropped at once.
+        """
+        from palimpsest.jobs import JobQueue, ingest_runner
+        from palimpsest.store import open_store
+
+        if self._queue is None:
+            from palimpsest.llm import Model
+            from palimpsest.notion.client import NotionClient
+
+            def new_model():
+                return Model(self.settings.model,
+                             api_key=self.settings.anthropic_api_key,
+                             max_tokens=self.settings.max_tokens)
+
+            def new_notion():
+                return NotionClient(self.settings.notion_token or "",
+                                    version=self.settings.notion_version)
+
+            self._queue = JobQueue(
+                store_factory=lambda: open_store(self.settings.database_url),
+                handlers={"ingest": ingest_runner(
+                    self.settings, model_factory=new_model, archive=self.artifacts,
+                    notion_factory=new_notion if self.settings.has_notion else None,
+                    on_change=self.refresh_index)},
+                workers=self.settings.workers,
+            ).start()
+        return self._queue
+
+    def start_bot(self):
+        """Start the Telegram bot in this process, if one is configured.
+
+        Returns the bot, or `None`. It runs on a daemon thread sharing the queue: the
+        bot is a capture surface like the extension and the desktop app, not a separate
+        instance of the product.
+        """
+        import threading
+
+        from palimpsest.store import open_store
+
+        if self._bot is not None or not self.settings.telegram_token:
+            return self._bot
+        try:
+            from palimpsest.telegram import Bot
+
+            self._bot = Bot(
+                token=self.settings.telegram_token, settings=self.settings,
+                store_factory=lambda: open_store(self.settings.database_url),
+                queue=self.queue,
+                allowed=frozenset(self.settings.telegram_allowed_chats))
+            threading.Thread(target=self._bot.run, name="palimpsest-telegram",
+                             daemon=True).start()
+            log.info("telegram bot started (%d paired chat(s))",
+                     len(self.settings.telegram_allowed_chats))
+        except Exception:
+            # A bad token must not stop the review app from serving.
+            log.exception("could not start the telegram bot")
+            self._bot = None
+        return self._bot
+
     # -- health ----------------------------------------------------------------
 
     def health(self) -> dict:
@@ -123,6 +206,10 @@ class AppState:
         return ok, {"status": "ready" if ok else "not ready", "checks": checks}
 
     def close(self) -> None:
+        if self._bot is not None:
+            self._bot.stop()
+        if self._queue is not None:
+            self._queue.stop()
         self.store.close()
 
 
@@ -135,6 +222,7 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
     from palimpsest.serve.middleware import Metrics, install
+    from palimpsest.serve.upload import register as register_uploads
 
     st = state or AppState(**kwargs)
     metrics = Metrics()
@@ -142,6 +230,24 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
     @contextlib.asynccontextmanager
     async def lifespan(_app):
         log.info("palimpsest %s starting in %s", __version__, st.settings.environment)
+        # Configure tracing once at startup so it logs its state and is ready before the
+        # first model call, rather than initialising lazily mid-request.
+        with contextlib.suppress(Exception):
+            from palimpsest import trace
+
+            trace.configure(st.settings)
+        # A job left `running` by a killed process is a capture the user believes was
+        # taken. Rescue it before accepting new work, not lazily.
+        with contextlib.suppress(Exception):
+            rescued = st.store.requeue_stale_jobs()
+            if rescued:
+                log.info("re-queued %d job(s) interrupted by a previous run", rescued)
+
+        # The bot shares this process's queue rather than running its own. Two queues
+        # against one SQLite file would both be correct and would double every worker,
+        # and the desktop app would then be starting a second copy of the backend it
+        # already supervises.
+        st.start_bot()
         yield
         with contextlib.suppress(Exception):
             st.close()
@@ -256,6 +362,51 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
             raise HTTPException(400, str(e)) from e
         return result.as_dict()
 
+    # -- capture ---------------------------------------------------------------
+    #
+    # `/v1/ingest` above is synchronous and stays that way: it is the honest thing for
+    # a CLI or a script that wants the patch in the response. Every *interactive*
+    # surface uses the queue instead, because a browser popup is gone the moment you
+    # click away and a desktop drop of nine files cannot hold a socket for twenty
+    # minutes. Same pipeline, different promise about when it finishes.
+
+    def _capture(payload: dict, origin: str | None = None) -> dict:
+        spec = (payload.get("spec") or "").strip()
+        text = (payload.get("text") or "").strip()
+        kind = payload.get("kind")
+
+        if not spec and text:
+            # A pasted transcript is not a note. Marking it as one throws away the
+            # timestamps sitting in it, and every claim drawn from that lecture then
+            # anchors to a character offset nobody can act on.
+            spec = f"transcript:{text}" if kind == "transcript" else f"text:{text}"
+        if not spec:
+            raise HTTPException(422, "send {'spec': '<url | path>'} or {'text': '...'}")
+
+        job = st.queue.submit(
+            spec, source_kind=kind, title=payload.get("title"),
+            url=payload.get("url"), origin=origin or payload.get("origin"),
+        )
+        return job
+
+    @app.post("/v1/jobs", tags=["capture"], status_code=202)
+    def create_job(payload: dict = Body(...)):
+        """Queue a capture and return immediately. **Writes nothing to Notion here.**"""
+        return _capture(payload)
+
+    @app.get("/v1/jobs", tags=["capture"])
+    def list_jobs(status: str | None = None, limit: int = Query(50, le=500)):
+        return {"jobs": st.store.list_jobs(status=status, limit=limit)}
+
+    @app.get("/v1/jobs/{job_id}", tags=["capture"])
+    def get_job(job_id: str):
+        job = st.store.get_job(job_id)
+        if job is None:
+            raise HTTPException(404, f"no job {job_id}")
+        return job
+
+    register_uploads(app, st)
+
     @app.get("/v1/patches", tags=["pipeline"])
     def patches(status: str | None = None, limit: int = Query(50, le=500)):
         return {"patches": st.store.list_patches(status=status, limit=limit)}
@@ -305,7 +456,8 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
             raise HTTPException(400, "NOTION_TOKEN is not set")
 
         result = apply_patch(st.notion, st.store, found, dry_run=dry_run,
-                             reviewer=reviewer or None)
+                             reviewer=reviewer or None,
+                             journal=None if dry_run else st.journal)
         if not dry_run:
             st.refresh_index()
         return result.as_dict()
@@ -328,8 +480,37 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
         if found is None:
             raise HTTPException(404, f"no patch {patch_id}")
         result = revert_patch(st.notion, st.store, found,
-                              reviewer=payload.get("reviewer"))
+                              reviewer=payload.get("reviewer"), journal=st.journal)
         st.refresh_index()
+        return result.as_dict()
+
+    # -- the shape of the workspace --------------------------------------------
+
+    @app.post("/v1/organise", tags=["organise"])
+    def organise_workspace(payload: dict = Body(default={})):
+        """Propose a shape for the workspace. **Writes nothing to Notion.**
+
+        Returns a patch of structural operations and a review list. The patch is
+        applied through the ordinary `/v1/patches/{id}/apply` route, so organisation
+        gets the same approval, the same ledger and the same exact undo as everything
+        else that touches your notes.
+        """
+        from palimpsest.organise import organise as plan_shape
+
+        if not st.settings.has_model:
+            raise HTTPException(400, "planning a taxonomy needs a model; set "
+                                     "ANTHROPIC_API_KEY")
+        roots = st.settings.notion_root_pages
+        result = plan_shape(
+            st.store, st.model,
+            root_page_id=payload.get("root_page_id") or (roots[0] if roots else None),
+            min_confidence=float(payload.get("min_confidence",
+                                             st.settings.min_confidence)),
+            max_pages=int(payload.get("max_pages", 300)),
+            rename=bool(payload.get("rename", True)),
+        )
+        if len(result.patch):
+            st.store.put_patch(result.patch)
         return result.as_dict()
 
     # -- the sweeps ------------------------------------------------------------

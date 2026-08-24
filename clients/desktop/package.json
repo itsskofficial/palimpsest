@@ -1,0 +1,24 @@
+{
+  "name": "palimpsest-desktop",
+  "productName": "palimpsest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capture anything into your palimpsest knowledge base.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "dev.palimpsest.desktop",
+    "files": ["**/*", "!out", "!dist"],
+    "win": { "target": "nsis", "icon": "icon.png" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}

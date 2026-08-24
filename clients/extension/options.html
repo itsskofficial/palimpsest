@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>palimpsest settings</title>
+    <link rel="stylesheet" href="popup.css" />
+    <style>
+      body { width: 460px; }
+      label.field { display: block; margin-bottom: 14px; }
+      label.field span { display: block; font-weight: 500; margin-bottom: 3px; }
+      label.field small { color: var(--muted); font-weight: 400; display: block; margin-bottom: 5px; }
+      input[type="text"], input[type="password"] {
+        width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 6px;
+        background: var(--bg); color: var(--fg); font: 12px/1.4 ui-monospace, Consolas, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <header><h1>palimpsest settings</h1></header>
+
+    <label class="field">
+      <span>Server</span>
+      <small>Where palimpsest is listening. The desktop app uses this port too.</small>
+      <input type="text" id="server" placeholder="http://127.0.0.1:8100" />
+    </label>
+
+    <label class="field">
+      <span>API key</span>
+      <small
+        >Only needed if you set <code>PALIMPSEST_API_KEY</code>. A local-only server does
+        not use one.</small
+      >
+      <input type="password" id="apiKey" placeholder="(blank for a local server)" />
+    </label>
+
+    <label class="field">
+      <span>Your name</span>
+      <small>Recorded against every patch you approve, so the ledger says who decided.</small>
+      <input type="text" id="reviewer" placeholder="sk" />
+    </label>
+
+    <button id="save" class="primary">Save</button>
+    <div id="message" class="message" hidden></div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

@@ -13,7 +13,14 @@ htmlcov/
 .DS_Store
 results/*.log
 
+# the browser extension and desktop app
+node_modules/
+clients/desktop/out/
+clients/desktop/dist/
+clients/extension/*.zip
+
 # local platform artifacts
+archive/
 *.db
 *.db-wal
 *.db-shm

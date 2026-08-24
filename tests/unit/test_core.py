@@ -323,6 +323,39 @@ def test_html_reader_drops_chrome_and_keeps_headings():
     assert "20%" in text
 
 
+def test_an_unclosed_skipped_tag_does_not_swallow_the_rest_of_the_page():
+    """HTML5 lets a container close its unclosed children implicitly, so this markup is
+    valid and renders fine in a browser. `HTMLParser` reports three `<nav>` opens and no
+    closes, so a depth counter never returns to zero and every word after the sidebar is
+    dropped — the page comes back nearly empty with no error to explain it.
+
+    Real markup: go.dev serves exactly this shape, and returned 40 characters.
+    """
+    from palimpsest.ingest.web import html_to_text
+
+    _, text = html_to_text(
+        "<html><body>"
+        "<aside><nav>menu one<nav>menu two<nav>menu three</aside>"
+        "<article><h1>The Article</h1><p>The finding was 20%.</p></article>"
+        "</body></html>")
+
+    assert "The finding was 20%." in text
+    assert "# The Article" in text
+    assert "menu one" not in text
+    assert "menu three" not in text
+
+
+def test_a_stray_closing_tag_does_not_unskip_the_document():
+    """The mirror image: `</nav>` with no matching open must not pop something else off
+    the stack and start emitting navigation as if it were content."""
+    from palimpsest.ingest.web import html_to_text
+
+    _, text = html_to_text(
+        "<html><body></nav><nav>chrome</nav><p>Real content.</p></body></html>")
+    assert "Real content." in text
+    assert "chrome" not in text
+
+
 def test_markdown_segments_carry_a_cumulative_heading_path():
     from palimpsest.ingest.web import segments_from_markdown
 

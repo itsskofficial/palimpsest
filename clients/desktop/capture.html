@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>palimpsest</title>
+    <link rel="stylesheet" href="capture.css" />
+  </head>
+  <body>
+    <div id="drop-veil" class="veil" hidden><span>Drop to capture</span></div>
+
+    <main id="view-capture">
+      <header class="bar">
+        <span class="brand">palimpsest</span>
+        <span id="status" class="status">starting…</span>
+      </header>
+
+      <textarea
+        id="input"
+        placeholder="Paste a link, a transcript, or a thought.&#10;Drop files anywhere on this window.&#10;&#10;Enter to capture · Shift+Enter for a new line · Esc to dismiss"
+        autofocus
+      ></textarea>
+
+      <div class="row">
+        <label class="check">
+          <input type="checkbox" id="as-transcript" />
+          <span>Transcript (keep timestamps)</span>
+        </label>
+        <div class="actions">
+          <button id="browse" class="ghost">Files…</button>
+          <button id="send" class="primary">Capture</button>
+        </div>
+      </div>
+
+      <div id="result" class="result" hidden></div>
+
+      <footer class="bar bar--foot">
+        <button id="review" class="link">Review patches →</button>
+        <button id="settings" class="link">Settings</button>
+      </footer>
+    </main>
+
+    <main id="view-settings" hidden>
+      <header class="bar">
+        <span class="brand">Settings</span>
+        <button id="settings-back" class="link">Back</button>
+      </header>
+
+      <label class="field">
+        <span>ANTHROPIC_API_KEY</span>
+        <small>Extraction and classification. Everything else works without it.</small>
+        <input type="password" id="ANTHROPIC_API_KEY" />
+      </label>
+
+      <label class="field">
+        <span>NOTION_TOKEN</span>
+        <small>From notion.so/my-integrations. Share a page with the integration too.</small>
+        <input type="password" id="NOTION_TOKEN" />
+      </label>
+
+      <label class="field">
+        <span>PALIMPSEST_NOTION_ROOTS</span>
+        <small>Page id the mirror is limited to, and where new hubs get created.</small>
+        <input type="text" id="PALIMPSEST_NOTION_ROOTS" />
+      </label>
+
+      <div class="two">
+        <label class="field">
+          <span>PALIMPSEST_APPLY</span>
+          <small>1 lets it write to Notion. 0 proposes only.</small>
+          <input type="text" id="PALIMPSEST_APPLY" placeholder="0" />
+        </label>
+        <label class="field">
+          <span>PALIMPSEST_AUTONOMY</span>
+          <small>none · low · medium</small>
+          <input type="text" id="PALIMPSEST_AUTONOMY" placeholder="none" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Speech to text</span>
+        <small>
+          For dropped recordings. Any one. Deepgram for long files and speaker labels,
+          Groq for cheap and fast (25 MB cap), Sarvam for Hinglish.
+        </small>
+        <input type="password" id="DEEPGRAM_API_KEY" placeholder="DEEPGRAM_API_KEY" />
+      </label>
+      <div class="two">
+        <label class="field">
+          <input type="password" id="GROQ_API_KEY" placeholder="GROQ_API_KEY" />
+        </label>
+        <label class="field">
+          <input type="password" id="SARVAM_API_KEY" placeholder="SARVAM_API_KEY" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span>TELEGRAM_BOT_TOKEN</span>
+        <small>From @BotFather. The bot starts with the server.</small>
+        <input type="password" id="TELEGRAM_BOT_TOKEN" />
+      </label>
+
+      <label class="field">
+        <span>TELEGRAM_ALLOWED_CHATS</span>
+        <small>
+          Required. Message the bot once and it replies with your chat id; paste it
+          here. Without this it refuses everyone.
+        </small>
+        <input type="text" id="TELEGRAM_ALLOWED_CHATS" />
+      </label>
+
+      <label class="field">
+        <span>FIRECRAWL_API_KEY</span>
+        <small>Optional. For JavaScript-rendered pages and hosts that block bots.</small>
+        <input type="password" id="FIRECRAWL_API_KEY" />
+      </label>
+
+      <button id="settings-save" class="primary">Save</button>
+      <div id="settings-note" class="result" hidden></div>
+    </main>
+
+    <script src="capture.js"></script>
+  </body>
+</html>

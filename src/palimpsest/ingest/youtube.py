@@ -25,19 +25,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from palimpsest.ingest import make_source
+from palimpsest.ingest import PASSAGE_CHARS, make_source, merge_cues
 from palimpsest.types import Source
 
-__all__ = ["from_youtube", "video_id"]
+__all__ = ["PASSAGE_CHARS", "from_youtube", "video_id"]
 
 log = logging.getLogger("palimpsest.ingest.youtube")
 
 _ID = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{6,})")
 USER_AGENT = "Mozilla/5.0 (compatible; palimpsest/0.1)"
-
-#: Cues are merged into passages of about this many characters. Sentence-level cues are
-#: too short for a claim to sit in, and a whole transcript is too coarse to anchor.
-PASSAGE_CHARS = 900
 
 
 def video_id(url: str) -> str:
@@ -45,13 +41,6 @@ def video_id(url: str) -> str:
     if not m:
         raise ValueError(f"not a YouTube URL: {url}")
     return m.group(1)
-
-
-def _timestamp(seconds: float) -> str:
-    total = int(seconds)
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
 def _fetch(url: str, timeout: float = 30.0) -> str:
@@ -125,40 +114,12 @@ def from_youtube(url: str) -> Source:
             "(Deepgram or Sarvam) and ingest the text."
         )
 
-    # Merge cues into passages, remembering where each passage began.
-    parts: list[str] = []
-    segments: list[dict] = []
-    buffer: list[str] = []
-    buffer_start = cues[0]["start"]
-    cursor = 0
+    # The deep link is the whole point: it opens the video at the second the claim was
+    # made. Merging itself is shared with the pasted-transcript adapter, so a lecture
+    # anchors the same way whether its captions were fetched or copied out of a panel.
+    text, segments = merge_cues(
+        cues, deep_link=lambda s: f"{canonical}&t={int(s)}s")
 
-    def flush() -> None:
-        nonlocal buffer, buffer_start, cursor
-        if not buffer:
-            return
-        chunk = " ".join(buffer).strip() + "\n\n"
-        start = cursor
-        parts.append(chunk)
-        cursor += len(chunk)
-        stamp = _timestamp(buffer_start)
-        segments.append({
-            "start": start, "end": cursor, "kind": "timestamp",
-            "locator": stamp,
-            # The deep link is the whole point: this opens the video at the second
-            # the claim was made.
-            "url": f"{canonical}&t={int(buffer_start)}s",
-        })
-        buffer = []
-
-    for cue in cues:
-        if not buffer:
-            buffer_start = cue["start"]
-        buffer.append(cue["text"])
-        if sum(len(b) for b in buffer) >= PASSAGE_CHARS:
-            flush()
-    flush()
-
-    text = "".join(parts).strip()
     return make_source("youtube", title, text, url=canonical, segments=segments,
                        video_id=vid, cues=len(cues),
                        duration_s=int(cues[-1]["start"]) if cues else None)

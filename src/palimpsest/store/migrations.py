@@ -374,6 +374,245 @@ END $$;
 
 _RLS_SQLITE = "-- SQLite has no row-level security and no Data API. Nothing to do."
 
+# --- 0003: the capture queue -------------------------------------------------
+
+#: Capture is asynchronous because ingestion is slow and the things that capture are
+#: not. A browser popup closes the instant you click away; a desktop drop of nine PDFs
+#: cannot hold a socket open for twenty minutes. So a capture writes a row here and
+#: returns immediately, and a worker drains the queue.
+#:
+#: The queue is *durable* rather than in-memory for one reason: the failure it prevents
+#: is losing something you asked it to remember. Kill the machine mid-ingest and the
+#: job is still `queued` on the next start. An in-process deque loses it silently,
+#: which is the worst possible behaviour for a capture tool — you believe it has the
+#: link and it does not.
+_JOBS_PG = """
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id      TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL DEFAULT 'ingest',
+    spec        TEXT NOT NULL DEFAULT '',
+    source_kind TEXT,
+    title       TEXT,
+    url         TEXT,
+    origin      TEXT,
+    status      TEXT NOT NULL DEFAULT 'queued',
+    patch_id    TEXT,
+    result      JSONB,
+    error       TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    created_at  DOUBLE PRECISION NOT NULL,
+    started_at  DOUBLE PRECISION,
+    finished_at DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
+"""
+
+_JOBS_SQLITE = """
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id      TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL DEFAULT 'ingest',
+    spec        TEXT NOT NULL DEFAULT '',
+    source_kind TEXT,
+    title       TEXT,
+    url         TEXT,
+    origin      TEXT,
+    status      TEXT NOT NULL DEFAULT 'queued',
+    patch_id    TEXT,
+    result      TEXT,
+    error       TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    created_at  REAL NOT NULL,
+    started_at  REAL,
+    finished_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
+"""
+
+_JOBS_RLS_PG = """
+-- Same reasoning as 0002: a job row carries the text you captured.
+ALTER TABLE jobs ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE ALL ON jobs FROM anon, authenticated;
+  END IF;
+END $$;
+"""
+
+
+# --- 0004: the agent ---------------------------------------------------------
+
+#: The agent's own state: conversations, procedural memory, and the approval queue that
+#: sits between a proposed patch and Notion. Kept in the same store as the mirror and
+#: the ledger, on purpose — one place to back up, one place to reason about, and the
+#: approval row can reference a patch id without a second database in the loop.
+_AGENT_PG = """
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    session_id  TEXT PRIMARY KEY,
+    chat_id     TEXT,
+    surface     TEXT NOT NULL DEFAULT 'telegram',
+    summary     TEXT NOT NULL DEFAULT '',
+    token_count INTEGER NOT NULL DEFAULT 0,
+    started_at  DOUBLE PRECISION NOT NULL,
+    last_active DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_chat ON agent_sessions(chat_id, last_active DESC);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id         BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    content    JSONB NOT NULL,
+    trace_id   TEXT,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_msgs_session ON agent_messages(session_id, id);
+
+-- Procedural memory: what the agent has learned about how you want it to behave.
+-- `key` is unique per kind so a preference is updated, not duplicated.
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id         BIGSERIAL PRIMARY KEY,
+    kind       TEXT NOT NULL DEFAULT 'preference',
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    source     TEXT,
+    updated_at DOUBLE PRECISION NOT NULL,
+    UNIQUE (kind, key)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_kind ON agent_memory(kind);
+
+-- The gate. A held patch waits here for a human tap; nothing reaches Notion from the
+-- agent without a row of this table resolving to 'approved'.
+CREATE TABLE IF NOT EXISTS approvals (
+    approval_id   TEXT PRIMARY KEY,
+    patch_id      TEXT NOT NULL,
+    session_id    TEXT,
+    chat_id       TEXT,
+    operation_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    kind          TEXT NOT NULL DEFAULT 'apply',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    summary       TEXT,
+    requested_at  DOUBLE PRECISION NOT NULL,
+    resolved_at   DOUBLE PRECISION,
+    resolved_by   TEXT,
+    expires_at    DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, requested_at);
+
+-- The eval ground truth and its run history.
+CREATE TABLE IF NOT EXISTS eval_examples (
+    id           TEXT PRIMARY KEY,
+    suite        TEXT NOT NULL DEFAULT 'relation',
+    input        JSONB NOT NULL,
+    expected     JSONB NOT NULL,
+    label_source TEXT NOT NULL DEFAULT 'human',
+    labelled_by  TEXT,
+    created_at   DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_examples_suite ON eval_examples(suite);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    run_id     TEXT PRIMARY KEY,
+    suite      TEXT NOT NULL,
+    model      TEXT,
+    scores     JSONB NOT NULL,
+    passed     BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runs_suite ON eval_runs(suite, created_at DESC);
+"""
+
+_AGENT_SQLITE = """
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    session_id  TEXT PRIMARY KEY,
+    chat_id     TEXT,
+    surface     TEXT NOT NULL DEFAULT 'telegram',
+    summary     TEXT NOT NULL DEFAULT '',
+    token_count INTEGER NOT NULL DEFAULT 0,
+    started_at  REAL NOT NULL,
+    last_active REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_chat ON agent_sessions(chat_id, last_active DESC);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    trace_id   TEXT,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_msgs_session ON agent_messages(session_id, id);
+
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL DEFAULT 'preference',
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    source     TEXT,
+    updated_at REAL NOT NULL,
+    UNIQUE (kind, key)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_kind ON agent_memory(kind);
+
+CREATE TABLE IF NOT EXISTS approvals (
+    approval_id   TEXT PRIMARY KEY,
+    patch_id      TEXT NOT NULL,
+    session_id    TEXT,
+    chat_id       TEXT,
+    operation_ids TEXT NOT NULL DEFAULT '[]',
+    kind          TEXT NOT NULL DEFAULT 'apply',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    summary       TEXT,
+    requested_at  REAL NOT NULL,
+    resolved_at   REAL,
+    resolved_by   TEXT,
+    expires_at    REAL
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, requested_at);
+
+CREATE TABLE IF NOT EXISTS eval_examples (
+    id           TEXT PRIMARY KEY,
+    suite        TEXT NOT NULL DEFAULT 'relation',
+    input        TEXT NOT NULL,
+    expected     TEXT NOT NULL,
+    label_source TEXT NOT NULL DEFAULT 'human',
+    labelled_by  TEXT,
+    created_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_examples_suite ON eval_examples(suite);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    run_id     TEXT PRIMARY KEY,
+    suite      TEXT NOT NULL,
+    model      TEXT,
+    scores     TEXT NOT NULL,
+    passed     INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runs_suite ON eval_runs(suite, created_at DESC);
+"""
+
+_AGENT_RLS_PG = """
+ALTER TABLE agent_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_memory   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE approvals      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE eval_examples  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE eval_runs      ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE ALL ON agent_sessions, agent_messages, agent_memory, approvals,
+                  eval_examples, eval_runs FROM anon, authenticated;
+  END IF;
+END $$;
+"""
+
 
 MIGRATIONS: list[Migration] = [
     Migration(
@@ -389,13 +628,27 @@ MIGRATIONS: list[Migration] = [
         postgres=_RLS_PG,
         sqlite=_RLS_SQLITE,
     ),
+    Migration(
+        id="0003_jobs",
+        description="durable capture queue, so a closed popup never loses a capture",
+        postgres=_JOBS_PG + _JOBS_RLS_PG,
+        sqlite=_JOBS_SQLITE,
+    ),
+    Migration(
+        id="0004_agent",
+        description="agent sessions, procedural memory, the approval gate, and evals",
+        postgres=_AGENT_PG + _AGENT_RLS_PG,
+        sqlite=_AGENT_SQLITE,
+    ),
 ]
 
 BOOKKEEPING = {"postgres": _BOOKKEEPING_PG, "sqlite": _BOOKKEEPING_SQLITE}
 
 #: Tables truncated by `palimpsest db reset`, in FK-safe order.
 ALL_TABLES = ("provenance", "applied_ops", "patches", "judgements", "claims",
-              "sources", "links", "blocks", "pages", "records")
+              "sources", "links", "blocks", "pages", "records", "jobs",
+              "agent_messages", "agent_sessions", "agent_memory", "approvals",
+              "eval_examples", "eval_runs")
 
 
 def postgres_sql(include_bookkeeping: bool = True) -> str:

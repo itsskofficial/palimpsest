@@ -318,6 +318,13 @@ class OpKind(str, Enum):
     `archive_block` rather than `delete_block` is also deliberate: Notion's API can
     delete, and this system never does. The worst case is a struck-through block with
     a footnote saying why.
+
+    The last three are *structural* rather than textual: they change where a page sits,
+    what it is called and how it is marked, without touching a word inside it. They
+    exist because a knowledge base gets disordered in two independent ways — the prose
+    drifts, and the filing drifts — and the second cannot be fixed by any amount of the
+    first. They invert exactly like everything else here: the mirror already knows each
+    page's parent, title and icon, so the undo is simply the previous value.
     """
 
     APPEND_BLOCK = "append_block"
@@ -328,6 +335,9 @@ class OpKind(str, Enum):
     ARCHIVE_BLOCK = "archive_block"
     CREATE_PAGE = "create_page"
     LINK_PAGES = "link_pages"
+    MOVE_PAGE = "move_page"
+    RENAME_PAGE = "rename_page"
+    SET_ICON = "set_icon"
 
 
 @dataclass
@@ -349,10 +359,32 @@ class Operation:
     op_id: str = field(default_factory=lambda: new_id("op_"))
     applied_at: float | None = None
     result: dict[str, Any] | None = None
+    #: Risk tier for operations that have no relation — the structural ones the
+    #: organiser emits. A relation implies its own tier, so this is only consulted when
+    #: there is no relation to ask. Without it, structural operations would sit outside
+    #: the autonomy ladder entirely and could never be automatic at any setting.
+    risk: str | None = None
 
     @property
     def applied(self) -> bool:
         return self.applied_at is not None
+
+    @property
+    def risk_tier(self) -> str:
+        """The tier the autonomy ladder gates this operation on.
+
+        Defaults to `medium` rather than `low` for an unlabelled operation: guessing
+        low would let something unclassified through automatically, and the direction
+        to be wrong in is the one that asks a human.
+        """
+        if self.relation is not None:
+            return self.relation.risk
+        return self.risk or "medium"
+
+    @property
+    def auto_appliable(self) -> bool:
+        """Whether this operation may *ever* run without a human."""
+        return self.relation.auto_appliable if self.relation is not None else True
 
     def summary(self) -> str:  # pragma: no cover - display only
         verb = {
@@ -364,6 +396,9 @@ class Operation:
             OpKind.ARCHIVE_BLOCK: "archive",
             OpKind.CREATE_PAGE: "create page",
             OpKind.LINK_PAGES: "link",
+            OpKind.MOVE_PAGE: "move",
+            OpKind.RENAME_PAGE: "rename",
+            OpKind.SET_ICON: "icon",
         }[self.kind]
         text = self.payload.get("text") or self.payload.get("title") or ""
         return f"{verb}: {text[:80]}" if text else verb
@@ -374,6 +409,7 @@ class Operation:
             "payload": self.payload, "inverse": self.inverse, "claim_id": self.claim_id,
             "relation": self.relation.value if self.relation else None,
             "applied_at": self.applied_at, "result": self.result,
+            "risk": self.risk_tier,
         }
 
     @classmethod
@@ -383,7 +419,7 @@ class Operation:
             inverse=d.get("inverse"), claim_id=d.get("claim_id"),
             relation=Relation(d["relation"]) if d.get("relation") else None,
             op_id=d.get("op_id") or new_id("op_"), applied_at=d.get("applied_at"),
-            result=d.get("result"),
+            result=d.get("result"), risk=d.get("risk"),
         )
 
 
@@ -413,7 +449,7 @@ class Patch:
     @property
     def needs_human(self) -> bool:
         """True when any operation came from a relation a human must decide."""
-        return any(op.relation and not op.relation.auto_appliable for op in self.operations)
+        return any(not op.auto_appliable for op in self.operations)
 
     def by_relation(self) -> dict[str, int]:
         out: dict[str, int] = {}

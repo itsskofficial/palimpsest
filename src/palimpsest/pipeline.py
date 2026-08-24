@@ -78,11 +78,44 @@ class IngestResult:
         )
 
 
+def _archive_original(archive, source: Source, spec: str, kind: str | None) -> None:
+    """Store the raw bytes of a local file, keyed on the source, before extraction.
+
+    Only local files, and only formats whose text is lossy — a `text:` note or a URL is
+    already fully captured by the normalised JSON, and fetching a URL's bytes here would
+    double every web request. Never raises: a failed original-archive must not stop an
+    ingest, exactly like the JSON archive beside it.
+    """
+    from pathlib import Path
+
+    if kind in ("text", "web") or spec.startswith(("http://", "https://", "text:",
+                                                   "transcript:")):
+        return
+    path = Path(spec)
+    try:
+        if not path.is_file():
+            return
+        data = path.read_bytes()
+        key = f"originals/{source.source_id}{path.suffix.lower()}"
+        ref = archive.put_bytes(key, data)
+        source.meta["original_key"] = ref.key
+        source.meta["original_bytes"] = len(data)
+        log.info("archived original %s (%d bytes)", path.name, len(data))
+    except Exception as e:  # pragma: no cover - defensive
+        log.warning("could not archive the original file: %s", e)
+
+
 def ingest(spec: str, store, model: Model | None = None, *, settings=None,
            kind: str | None = None, index: Index | None = None,
            archive=None, reuse: bool = True, max_windows: int | None = None,
+           title: str | None = None, url: str | None = None,
            ) -> IngestResult:
-    """Run one source all the way to a proposed patch. Writes nothing to Notion."""
+    """Run one source all the way to a proposed patch. Writes nothing to Notion.
+
+    `title` and `url` are context the caller has but the content does not carry — the
+    lecture a pasted transcript came from, the tab a capture was taken in. Adapters
+    that can infer their own ignore them.
+    """
     started = time.perf_counter()
     stages: dict[str, Any] = {}
 
@@ -91,6 +124,7 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
     source = resolve(
         spec, kind=kind, model=model,
         firecrawl_key=getattr(settings, "firecrawl_api_key", None),
+        title=title, url=url, settings=settings,
     )
     stages["ingest"] = {"seconds": round(time.perf_counter() - t0, 2),
                         "chars": len(source.text), "kind": source.kind,
@@ -114,7 +148,14 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
         claims = []
 
     # -- 3. archive the original ------------------------------------------
+    # Two things are archived, and the distinction matters. The normalised JSON is what
+    # every citation resolves against. But for a *file* — a PDF, an image, a recording
+    # you sent from your phone — the normalised text is a lossy derivative: it drops
+    # figures, tables, layout, and the ability to re-extract later with a better parser,
+    # and the file you sent may be the only copy. So the raw bytes are archived too,
+    # before extraction, and the key is recorded on the source.
     if archive is not None and not reused:
+        _archive_original(archive, source, spec, kind)
         try:
             ref = archive.put(f"sources/{source.source_id}.json", source.as_dict())
             source.archive_key = ref.key

@@ -62,6 +62,10 @@ class SQLiteStore:
             # point of having a store rather than a dict.
             self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
+        # Queue workers each hold their own connection, so two of them can want the
+        # write lock at once. Without a busy timeout that is an immediate
+        # "database is locked" rather than a wait of a few milliseconds.
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self.migrate()
 
     # -- schema ----------------------------------------------------------------
@@ -427,6 +431,268 @@ class SQLiteStore:
             out.append(d)
         return out
 
+    # -- the agent: sessions, messages, memory ---------------------------------
+
+    def upsert_session(self, session: dict) -> str:
+        now = time.time()
+        self.conn.execute(
+            "INSERT INTO agent_sessions (session_id, chat_id, surface, summary, "
+            "token_count, started_at, last_active) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(session_id) DO UPDATE SET summary=excluded.summary, "
+            "token_count=excluded.token_count, last_active=excluded.last_active",
+            (session["session_id"], session.get("chat_id"),
+             session.get("surface", "telegram"), session.get("summary", ""),
+             int(session.get("token_count", 0)), session.get("started_at", now), now),
+        )
+        self.conn.commit()
+        return session["session_id"]
+
+    def get_session_for_chat(self, chat_id: str) -> dict | None:
+        r = self.conn.execute(
+            "SELECT * FROM agent_sessions WHERE chat_id=? ORDER BY last_active DESC "
+            "LIMIT 1", (str(chat_id),)).fetchone()
+        return dict(r) if r else None
+
+    def add_message(self, session_id: str, role: str, content: Any,
+                    trace_id: str | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO agent_messages (session_id, role, content, trace_id, "
+            "created_at) VALUES (?,?,?,?,?)",
+            (session_id, role, _j(content), trace_id, time.time()))
+        self.conn.commit()
+
+    def get_messages(self, session_id: str, limit: int = 100) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT role, content, trace_id, created_at FROM agent_messages "
+            "WHERE session_id=? ORDER BY id DESC LIMIT ?", (session_id, limit)).fetchall()
+        out = [{**dict(r), "content": _uj(r["content"], None)} for r in rows]
+        out.reverse()  # oldest first, for replay into the model
+        return out
+
+    def put_memory(self, kind: str, key: str, value: str, *, confidence: float = 1.0,
+                   source: str | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO agent_memory (kind, key, value, confidence, source, updated_at) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(kind, key) DO UPDATE SET "
+            "value=excluded.value, confidence=excluded.confidence, "
+            "source=excluded.source, updated_at=excluded.updated_at",
+            (kind, key, value, confidence, source, time.time()))
+        self.conn.commit()
+
+    def get_memories(self, kind: str | None = None, limit: int = 200) -> list[dict]:
+        sql = "SELECT * FROM agent_memory"
+        params: list[Any] = []
+        if kind:
+            sql += " WHERE kind=?"
+            params.append(kind)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        return [dict(r) for r in self.conn.execute(sql, params)]
+
+    def delete_memory(self, kind: str, key: str) -> None:
+        self.conn.execute("DELETE FROM agent_memory WHERE kind=? AND key=?", (kind, key))
+        self.conn.commit()
+
+    # -- the agent: the approval gate ------------------------------------------
+
+    def put_approval(self, approval: dict) -> str:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO approvals (approval_id, patch_id, session_id, "
+            "chat_id, operation_ids, kind, status, summary, requested_at, resolved_at, "
+            "resolved_by, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (approval["approval_id"], approval["patch_id"], approval.get("session_id"),
+             approval.get("chat_id"), _j(approval.get("operation_ids", [])),
+             approval.get("kind", "apply"), approval.get("status", "pending"),
+             approval.get("summary"), approval.get("requested_at", time.time()),
+             approval.get("resolved_at"), approval.get("resolved_by"),
+             approval.get("expires_at")))
+        self.conn.commit()
+        return approval["approval_id"]
+
+    def get_approval(self, approval_id: str) -> dict | None:
+        r = self.conn.execute("SELECT * FROM approvals WHERE approval_id=?",
+                              (approval_id,)).fetchone()
+        if r is None:
+            return None
+        d = dict(r)
+        d["operation_ids"] = _uj(d.get("operation_ids"), [])
+        return d
+
+    def list_approvals(self, status: str | None = "pending",
+                       limit: int = 50) -> list[dict]:
+        sql = "SELECT * FROM approvals"
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status=?"
+            params.append(status)
+        sql += " ORDER BY requested_at DESC LIMIT ?"
+        params.append(limit)
+        out = []
+        for r in self.conn.execute(sql, params):
+            d = dict(r)
+            d["operation_ids"] = _uj(d.get("operation_ids"), [])
+            out.append(d)
+        return out
+
+    def resolve_approval(self, approval_id: str, status: str, by: str | None) -> None:
+        self.conn.execute(
+            "UPDATE approvals SET status=?, resolved_at=?, resolved_by=? "
+            "WHERE approval_id=?", (status, time.time(), by, approval_id))
+        self.conn.commit()
+
+    def expire_approvals(self, now: float | None = None) -> int:
+        now = now or time.time()
+        cur = self.conn.execute(
+            "UPDATE approvals SET status='expired' WHERE status='pending' "
+            "AND expires_at IS NOT NULL AND expires_at < ?", (now,))
+        self.conn.commit()
+        return int(cur.rowcount or 0)
+
+    # -- the agent: eval storage -----------------------------------------------
+
+    def put_eval_example(self, example: dict) -> str:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO eval_examples (id, suite, input, expected, "
+            "label_source, labelled_by, created_at) VALUES (?,?,?,?,?,?,?)",
+            (example["id"], example.get("suite", "relation"), _j(example["input"]),
+             _j(example["expected"]), example.get("label_source", "human"),
+             example.get("labelled_by"), example.get("created_at", time.time())))
+        self.conn.commit()
+        return example["id"]
+
+    def get_eval_examples(self, suite: str | None = None,
+                          limit: int = 1000) -> list[dict]:
+        sql = "SELECT * FROM eval_examples"
+        params: list[Any] = []
+        if suite:
+            sql += " WHERE suite=?"
+            params.append(suite)
+        sql += " ORDER BY created_at LIMIT ?"
+        params.append(limit)
+        out = []
+        for r in self.conn.execute(sql, params):
+            d = dict(r)
+            d["input"] = _uj(d.get("input"), {})
+            d["expected"] = _uj(d.get("expected"), {})
+            out.append(d)
+        return out
+
+    def put_eval_run(self, run: dict) -> str:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO eval_runs (run_id, suite, model, scores, passed, "
+            "created_at) VALUES (?,?,?,?,?,?)",
+            (run["run_id"], run["suite"], run.get("model"), _j(run.get("scores", {})),
+             int(bool(run.get("passed"))), run.get("created_at", time.time())))
+        self.conn.commit()
+        return run["run_id"]
+
+    def get_eval_runs(self, suite: str | None = None, limit: int = 20) -> list[dict]:
+        sql = "SELECT * FROM eval_runs"
+        params: list[Any] = []
+        if suite:
+            sql += " WHERE suite=?"
+            params.append(suite)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        out = []
+        for r in self.conn.execute(sql, params):
+            d = dict(r)
+            d["scores"] = _uj(d.get("scores"), {})
+            d["passed"] = bool(d.get("passed"))
+            out.append(d)
+        return out
+
+    # -- the capture queue -----------------------------------------------------
+
+    def put_job(self, job: dict) -> str:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO jobs (job_id, kind, spec, source_kind, title, url, "
+            "origin, status, patch_id, result, error, attempts, created_at, started_at, "
+            "finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (job["job_id"], job.get("kind", "ingest"), job.get("spec", ""),
+             job.get("source_kind"), job.get("title"), job.get("url"),
+             job.get("origin"), job.get("status", "queued"), job.get("patch_id"),
+             _j(job["result"]) if job.get("result") is not None else None,
+             job.get("error"), int(job.get("attempts", 0)),
+             job.get("created_at", time.time()), job.get("started_at"),
+             job.get("finished_at")),
+        )
+        self.conn.commit()
+        return job["job_id"]
+
+    def get_job(self, job_id: str) -> dict | None:
+        r = self.conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        if r is None:
+            return None
+        d = dict(r)
+        d["result"] = _uj(d.get("result"), None)
+        return d
+
+    def list_jobs(self, status: str | None = None, limit: int = 50) -> list[dict]:
+        sql = "SELECT * FROM jobs"
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status=?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        out = []
+        for r in self.conn.execute(sql, params):
+            d = dict(r)
+            d["result"] = _uj(d.get("result"), None)
+            out.append(d)
+        return out
+
+    def claim_job(self) -> dict | None:
+        """Atomically take the oldest queued job, or return `None`.
+
+        The `WHERE status='queued'` in the UPDATE is what makes this safe: two workers
+        racing on the same row produce one `rowcount == 1` and one `rowcount == 0`, so
+        exactly one of them runs the job. Selecting and then updating without that
+        predicate would let both win, and the visible symptom is a source ingested
+        twice with two patches proposed for it.
+        """
+        row = self.conn.execute(
+            "SELECT job_id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        cur = self.conn.execute(
+            "UPDATE jobs SET status='running', started_at=?, attempts=attempts+1 "
+            "WHERE job_id=? AND status='queued'",
+            (time.time(), row[0]),
+        )
+        self.conn.commit()
+        if cur.rowcount == 0:
+            return None  # another worker took it
+        return self.get_job(row[0])
+
+    def finish_job(self, job_id: str, status: str, *, result: dict | None = None,
+                   error: str | None = None, patch_id: str | None = None) -> None:
+        self.conn.execute(
+            "UPDATE jobs SET status=?, result=?, error=?, patch_id=COALESCE(?, patch_id), "
+            "finished_at=? WHERE job_id=?",
+            (status, _j(result) if result is not None else None, error, patch_id,
+             time.time(), job_id),
+        )
+        self.conn.commit()
+
+    def requeue_stale_jobs(self) -> int:
+        """Put jobs that were `running` when the process died back on the queue.
+
+        Called on startup. Without it, a crash during ingestion leaves a job stuck in
+        `running` forever and the capture is silently lost — which is the one failure a
+        capture tool must not have.
+        """
+        cur = self.conn.execute(
+            "UPDATE jobs SET status='queued', started_at=NULL "
+            "WHERE status='running' AND attempts < 3")
+        self.conn.execute(
+            "UPDATE jobs SET status='failed', error='abandoned after 3 attempts', "
+            "finished_at=? WHERE status='running' AND attempts >= 3", (time.time(),))
+        self.conn.commit()
+        return int(cur.rowcount or 0)
+
     # -- lifecycle -------------------------------------------------------------
 
     def stats(self) -> StoreStats:
@@ -435,6 +701,8 @@ class SQLiteStore:
             out[t] = int(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
         out["pending_patches"] = int(self.conn.execute(
             "SELECT COUNT(*) FROM patches WHERE status='proposed'").fetchone()[0])
+        out["queued_jobs"] = int(self.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0])
         return out
 
     def truncate_all(self) -> None:

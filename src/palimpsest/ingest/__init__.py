@@ -21,18 +21,103 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from palimpsest.types import Anchor, Source, new_id
 
-__all__ = ["anchor_for", "detect_kind", "resolve"]
+__all__ = ["anchor_for", "detect_kind", "merge_cues", "resolve", "timestamp"]
 
 _YOUTUBE = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{6,})")
+
+#: Timestamped cues are merged into passages of about this many characters. A single
+#: caption cue is too short for a claim to sit in, and a whole transcript is too coarse
+#: to anchor — a citation of "somewhere in this three-hour lecture" is not a citation.
+PASSAGE_CHARS = 900
+
+
+def timestamp(seconds: float) -> str:
+    """`1:42:07` for a long video, `4:12` for a short one."""
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def merge_cues(cues: list[dict], *, passage_chars: int = PASSAGE_CHARS,
+               deep_link: Callable[[float], str | None] | None = None,
+               ) -> tuple[str, list[dict]]:
+    """Merge timestamped cues into readable passages, anchored per cue.
+
+    Shared by every timestamped adapter — YouTube's fetched captions and a transcript
+    pasted out of Udemy or Coursera — so that a claim taken from a lecture anchors the
+    same way regardless of how the transcript was obtained. `deep_link` receives a time
+    in seconds and returns a URL that opens the source there, or `None` when the
+    platform has no such link.
+
+    **Text is merged; anchors are not.** Caption cues are a few words long, which is too
+    short for a claim to sit inside — so the text handed to the extractor is joined into
+    passages of roughly `passage_chars`. But the *segments* stay one-per-cue, because
+    they do a different job: they map a claim's character offset back to a moment. Emit
+    them per passage instead and every claim in a nine-hundred-character span cites the
+    timestamp of whatever was being said at the start of it, which for a dense lecture
+    is a citation that is confidently off by a minute. Since a passage is built out of
+    cues whose offsets are known anyway, per-cue anchoring is free.
+
+    Returns the normalised text and the segments that index into it.
+    """
+    if not cues:
+        return "", []
+
+    parts: list[str] = []
+    segments: list[dict] = []
+    buffer: list[tuple[float, str]] = []
+    cursor = 0
+
+    def flush() -> None:
+        nonlocal buffer, cursor
+        if not buffer:
+            return
+        chunk = " ".join(text for _, text in buffer).strip() + "\n\n"
+        # Walk the joined chunk to recover where each cue landed in the final text.
+        offset = cursor
+        for i, (start_s, text) in enumerate(buffer):
+            body = text.strip()
+            if not body:
+                continue
+            end = offset + len(body)
+            segments.append({
+                "start": offset, "end": end, "kind": "timestamp",
+                "locator": timestamp(start_s),
+                "url": deep_link(start_s) if deep_link else None,
+            })
+            # The single space `join` inserted, except after the final cue where the
+            # paragraph break follows instead.
+            offset = end + (1 if i < len(buffer) - 1 else 0)
+        # The trailing "\n\n" belongs to the last cue, so a claim whose span runs to the
+        # end of a passage still lands inside a segment rather than falling through to
+        # the offset fallback.
+        if segments:
+            segments[-1]["end"] = cursor + len(chunk)
+
+        parts.append(chunk)
+        cursor += len(chunk)
+        buffer = []
+
+    for cue in cues:
+        buffer.append((cue["start"], cue["text"]))
+        if sum(len(text) for _, text in buffer) >= passage_chars:
+            flush()
+    flush()
+
+    return "".join(parts).strip(), segments
 
 
 def detect_kind(spec: str) -> str:
     """Work out which adapter a spec wants, from its shape alone."""
     lowered = spec.lower()
+    if lowered.startswith("transcript:"):
+        return "transcript"
     if lowered.startswith("text:"):
         return "text"
     if _YOUTUBE.search(spec):
@@ -42,6 +127,13 @@ def detect_kind(spec: str) -> str:
             return "pdf"
         return "web"
     suffix = Path(spec).suffix.lower()
+    if suffix in (".vtt", ".srt"):
+        return "transcript"
+    # Video containers land here too: the adapter sends the file to a speech-to-text
+    # service, which reads the audio track and ignores the pictures.
+    if suffix in (".mp3", ".m4a", ".wav", ".ogg", ".oga", ".flac", ".aac", ".wma",
+                  ".opus", ".webm", ".mp4", ".mov", ".mkv", ".m4v", ".amr"):
+        return "audio"
     if suffix == ".pdf":
         return "pdf"
     if suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
@@ -54,14 +146,35 @@ def detect_kind(spec: str) -> str:
 
 
 def resolve(spec: str, *, kind: str | None = None, model=None,
-            firecrawl_key: str | None = None, title: str | None = None) -> Source:
+            firecrawl_key: str | None = None, title: str | None = None,
+            url: str | None = None, settings=None) -> Source:
     """Normalise `spec` into a `Source`.
 
     `model` is only needed by adapters that cannot work without one (images). Passing
     it is optional everywhere else, and no adapter will silently spend tokens.
+
+    `url` and `title` are what a caller knows but the text does not carry — the lecture
+    a pasted transcript came from, for instance. Nothing infers them; a transcript with
+    no URL still anchors to its timestamps, it just cannot deep-link.
+
+    `settings` is consulted only by adapters with more configuration than one key —
+    audio, which has three possible providers. Everything in it also has an environment
+    fallback, so `resolve` stays usable on its own.
     """
     kind = kind or detect_kind(spec)
 
+    if kind == "transcript":
+        from palimpsest.ingest.transcript import from_transcript
+
+        return from_transcript(spec, title=title, url=url)
+    if kind == "audio":
+        from palimpsest.ingest.audio import from_audio
+
+        return from_audio(spec, title=title, url=url,
+                          provider=getattr(settings, "transcribe_provider", None),
+                          deepgram_key=getattr(settings, "deepgram_api_key", None),
+                          groq_key=getattr(settings, "groq_api_key", None),
+                          sarvam_key=getattr(settings, "sarvam_api_key", None))
     if kind == "text":
         from palimpsest.ingest.files import from_text
 

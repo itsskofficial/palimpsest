@@ -259,8 +259,172 @@ def cmd_sweep(args) -> int:
     return 0
 
 
+def cmd_organise(args) -> int:
+    """Propose a shape for the workspace. Writes nothing."""
+    from palimpsest.organise import organise
+
+    store, settings = _store(args)
+    roots = settings.notion_root_pages
+    root = args.root or (roots[0] if roots else None)
+    if not root:
+        print("no root page: new hubs cannot be created, only existing ones reused.\n"
+              "  Set PALIMPSEST_NOTION_ROOTS=<page_id> or pass --root to change that.\n")
+
+    result = organise(store, _model(settings), root_page_id=root,
+                      min_confidence=args.min_confidence, max_pages=args.max_pages,
+                      rename=not args.no_rename)
+    print(result.summary())
+
+    for hub in result.hubs:
+        mark = "+" if hub["status"] == "new" else "·"
+        print(f"\n  {mark} {hub.get('icon', '')} {hub['name']}")
+        print(f"      {hub.get('rationale', '')[:100]}")
+
+    moves = [op for op in result.patch.operations if op.kind.value == "move_page"]
+    if moves:
+        print(f"\n  {len(moves)} page(s) to file:")
+        for op in moves[: args.show]:
+            page = store.get_page(op.target) or {}
+            print(f"    {(page.get('title') or op.target)[:38]:<38} → "
+                  f"{op.payload.get('hub')}  ({op.payload.get('confidence', 0):.2f})")
+
+    if result.review:
+        print(f"\n  {len(result.review)} needing your decision:")
+        for item in result.review[: args.show]:
+            print(f"    [{item['kind']}] {item.get('title') or item.get('hub')}")
+            print(f"        {item.get('detail', '')[:110]}")
+
+    if len(result.patch):
+        store.put_patch(result.patch)
+        print(f"\n  proposed as {result.patch.patch_id}. Nothing has been written.")
+        print(f"  Review it:  palimpsest apply {result.patch.patch_id} --dry-run")
+
+    _emit(result.as_dict(), args.out)
+    store.close()
+    return 0
+
+
+def cmd_eval(args) -> int:
+    """Measure the classifier against the golden set, or grow the set from history."""
+    from palimpsest.evals import component, golden, report
+
+    store, settings = _store(args)
+    try:
+        if args.suite == "bootstrap":
+            n = golden.bootstrap_from_history(store)
+            print(f"added {n} example(s) from approval history "
+                  f"({len(golden.load(store))} total)")
+            return 0
+        if args.suite == "history":
+            for run in store.get_eval_runs(limit=args.limit):
+                s = run["scores"]
+                print(f"  {run['created_at']:.0f}  {run['suite']:<10} "
+                      f"{'PASS' if run['passed'] else 'FAIL'}  "
+                      f"weighted_f1={s.get('weighted_f1', '?')} n={s.get('n', 0)}")
+            return 0
+        if args.suite == "component":
+            from palimpsest.retrieve import Index
+
+            model = _model(settings)
+            metrics = component.run(store, model, Index(store))
+            print(component.scorecard(metrics))
+            if not metrics.get("error"):
+                run_id = report.record(store, "component", metrics, model=settings.model)
+                print(f"\n  recorded as {run_id}")
+            _emit(metrics, args.out)
+            return 0 if metrics.get("passed") else 1
+        print(f"unknown eval suite {args.suite!r}")
+        return 2
+    finally:
+        store.close()
+
+
+def cmd_agent(args) -> int:
+    """Talk to the agent from the terminal — the same loop Telegram drives."""
+    from palimpsest import trace
+    from palimpsest.agent import ToolContext
+    from palimpsest.agent.loop import run_turn
+    from palimpsest.config import Settings
+
+    settings = Settings.load(database_url=args.db)
+    trace.configure(settings)
+    if not settings.has_model:
+        print("ANTHROPIC_API_KEY is not set; the agent needs a model.")
+        return 2
+
+    ctx = ToolContext(settings)
+    session_id = f"cli_{int(__import__('time').time())}"
+    try:
+        if args.message:
+            reply = run_turn(ctx, args.message, session_id=session_id, chat_id=None,
+                             on_step=lambda n: print(f"  · {n}"))
+            print("\n" + reply.text)
+            if reply.approvals:
+                print(f"\n[{len(reply.approvals)} change(s) held for approval — "
+                      f"apply in the review app or Telegram]")
+            return 0
+        # Interactive REPL.
+        print("palimpsest agent — talk to your notes. Ctrl-C to exit.\n")
+        while True:
+            try:
+                msg = input("you › ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not msg:
+                continue
+            reply = run_turn(ctx, msg, session_id=session_id, chat_id=None,
+                             on_step=lambda n: print(f"  · {n}"))
+            print(f"\npal › {reply.text}\n")
+        return 0
+    finally:
+        trace.flush()
+        ctx.close()
+
+
+def cmd_telegram(args) -> int:
+    """Run the Telegram bot: send it anything, it reports what changed."""
+    from palimpsest import telegram
+    from palimpsest.config import Settings
+
+    settings = Settings.load(database_url=args.db)
+    if not settings.telegram_token:
+        print("TELEGRAM_BOT_TOKEN is not set.\n"
+              "  Message @BotFather on Telegram, send /newbot, and paste the token.")
+        return 2
+    if not settings.telegram_allowed_chats:
+        print("TELEGRAM_ALLOWED_CHATS is empty, so every chat will be refused.\n"
+              "  Message the bot once — it replies with your chat id. Put that id in\n"
+              "  TELEGRAM_ALLOWED_CHATS and restart.\n")
+    try:
+        telegram.run(settings)
+    except KeyboardInterrupt:
+        print("\nstopped")
+    return 0
+
+
+def cmd_setup(args) -> int:
+    """The interactive first-run wizard: keys, root page, and Telegram pairing."""
+    from palimpsest import onboard
+    from palimpsest.config import Settings
+
+    onboard.run(Settings.load(), force=True)
+    return 0
+
+
 def cmd_serve(args) -> int:
     from palimpsest import serve
+    from palimpsest.config import Settings
+    from palimpsest.onboard import is_configured
+    from palimpsest.onboard import run as run_wizard
+
+    # First run with nothing configured, at a real terminal: offer the wizard rather
+    # than starting a bot that can do nothing and explains nothing. A non-interactive
+    # start (a container, a service) skips this and serves with whatever it was given.
+    settings = Settings.load(database_url=args.db)
+    if not is_configured(settings) and sys.stdin.isatty() and not args.no_setup:
+        print("\nThis looks like a first run — let's get you set up.")
+        run_wizard(settings, force=True)
 
     serve.run(host=args.host, port=args.port, db=args.db)
     return 0
@@ -521,10 +685,46 @@ def build_parser() -> argparse.ArgumentParser:
                     help="contradictions: cap the pairs sent to the model")
     sp.set_defaults(func=cmd_sweep)
 
-    sp = sub.add_parser("serve", help="the review app on :8100")
+    sp = sub.add_parser("organise", aliases=["organize"],
+                        help="propose a shape for the workspace (writes nothing)")
+    common(sp)
+    sp.add_argument("--root", default=None,
+                    help="page new hubs are created under; defaults to the first "
+                         "PALIMPSEST_NOTION_ROOTS entry")
+    sp.add_argument("--min-confidence", type=float, default=0.75,
+                    help="placements below this go to review instead of the patch")
+    sp.add_argument("--max-pages", type=int, default=300)
+    sp.add_argument("--no-rename", action="store_true",
+                    help="propose moves only, never title changes")
+    sp.add_argument("--show", type=int, default=15, help="how many to print")
+    sp.set_defaults(func=cmd_organise)
+
+    sp = sub.add_parser("eval", help="measure the classifier against the golden set")
+    sp.add_argument("suite", choices=["component", "bootstrap", "history"])
+    common(sp)
+    sp.add_argument("--limit", type=int, default=20)
+    sp.set_defaults(func=cmd_eval)
+
+    sp = sub.add_parser("agent", help="talk to your notes from the terminal")
+    sp.add_argument("message", nargs="?", default=None,
+                    help="a one-shot message; omit for an interactive session")
+    sp.add_argument("--db", default=None)
+    sp.set_defaults(func=cmd_agent)
+
+    sp = sub.add_parser("telegram", help="the bot: message it anything")
+    sp.add_argument("--db", default=None)
+    sp.set_defaults(func=cmd_telegram)
+
+    sp = sub.add_parser("setup", aliases=["init", "onboard"],
+                        help="interactive first-run setup: keys, Notion, Telegram")
+    sp.set_defaults(func=cmd_setup)
+
+    sp = sub.add_parser("serve", help="the review app + bot on :8100")
     sp.add_argument("--host", default=None)
     sp.add_argument("--port", type=int, default=None)
     sp.add_argument("--db", default=None)
+    sp.add_argument("--no-setup", action="store_true",
+                    help="skip the first-run wizard even at a terminal")
     sp.set_defaults(func=cmd_serve)
 
     sp = sub.add_parser("status", help="configuration, mirror size, and what looks wrong")

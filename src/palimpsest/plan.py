@@ -134,6 +134,16 @@ def plan(judgements: list[Judgement], claims: dict[str, Claim], source: Source,
                                    "judgement": judgement.as_dict(),
                                    "reason": "no applicable target"})
             continue
+
+        # Stamp the reasoning onto every operation, in one place rather than in each
+        # of the seven builders. The relation alone says *what* happened; this is the
+        # only record of *why this claim, against this block* — and it is what the
+        # Notion journal and the review UI both show. Losing it means an edit you can
+        # revert but cannot account for, which is the failure the ledger exists to
+        # prevent.
+        for op in ops:
+            op.payload.setdefault("rationale", judgement.rationale)
+            op.payload.setdefault("confidence", round(judgement.confidence, 3))
         patch.operations.extend(ops)
 
     return result

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>palimpsest</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>palimpsest</h1>
+      <span id="health" class="pill pill--idle">checking…</span>
+    </header>
+
+    <section class="tab">
+      <div id="tab-title" class="tab__title">…</div>
+      <div id="tab-plan" class="tab__plan"></div>
+    </section>
+
+    <button id="capture" class="primary" disabled>Capture this page</button>
+
+    <details class="paste">
+      <summary>Paste text or a transcript</summary>
+      <textarea
+        id="paste-body"
+        rows="6"
+        placeholder="Paste a lecture transcript, a note, or a link.&#10;&#10;Timestamps like 0:15 or [1:02:33] are kept, so citations point at the moment rather than at the file."
+      ></textarea>
+      <label class="check">
+        <input type="checkbox" id="paste-transcript" />
+        Treat as a timestamped transcript
+      </label>
+      <button id="paste-send" class="secondary">Send</button>
+    </details>
+
+    <div id="message" class="message" hidden></div>
+
+    <section class="recent">
+      <div class="recent__head">
+        <span>Recent</span>
+        <a id="review-link" href="#" target="_blank">Review →</a>
+      </div>
+      <ul id="jobs"></ul>
+    </section>
+
+    <footer>
+      <a id="options-link" href="#">Settings</a>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -59,6 +59,17 @@ class ApplyResult:
         return f"{base}  ({self.status})"
 
 
+def _source_row(store, source_id: str) -> dict | None:
+    """The source behind a patch, as a plain dict for the journal row."""
+    if not source_id:
+        return None
+    try:
+        source = store.get_source(source_id)
+        return source.as_dict() if source is not None else None
+    except Exception:  # pragma: no cover - the journal is never load-bearing
+        return None
+
+
 def _page_of(store, target: str) -> str | None:
     """Which page an operation touches — for the ledger's per-page history."""
     block = store.get_block(target)
@@ -106,9 +117,47 @@ def _build_inverse(store, op: Operation) -> dict | None:
     if op.kind == OpKind.ARCHIVE_BLOCK:
         return {"kind": "restore_block", "target": op.target, "payload": {}}
 
+    # Structural operations invert to the page's current filing, which the mirror
+    # already holds. A page missing from the mirror gets no inverse and is therefore
+    # refused below rather than applied irreversibly.
+    if op.kind is OpKind.MOVE_PAGE:
+        page = store.get_page(op.target)
+        if page is None:
+            return None
+        parent, kind = page.get("parent_id"), page.get("parent_kind")
+        # Notion's move endpoint takes a page or a data source, never the workspace —
+        # so a page sitting at the top level can be filed but not put back. Refusing to
+        # compute an inverse here is what makes the applier refuse the move.
+        if not parent or kind not in ("page_id", "page", None):
+            return None
+        return {"kind": OpKind.MOVE_PAGE.value, "target": op.target,
+                "payload": {"parent_page_id": parent}}
+
+    if op.kind is OpKind.RENAME_PAGE:
+        page = store.get_page(op.target)
+        if page is None:
+            return None
+        return {"kind": OpKind.RENAME_PAGE.value, "target": op.target,
+                "payload": {"title": page.get("title", "")}}
+
+    if op.kind is OpKind.SET_ICON:
+        page = store.get_page(op.target)
+        if page is None:
+            return None
+        # A page with no icon inverts to clearing the icon, not to leaving it — hence
+        # an explicit `None` rather than an absent key.
+        return {"kind": OpKind.SET_ICON.value, "target": op.target,
+                "payload": {"icon": page.get("icon")}}
+
     if op.kind == OpKind.LINK_PAGES:
         return None
     return None
+
+
+#: Operations that must not run without an inverse. For everything else a missing
+#: inverse means "the response will supply it"; for these it means the mirror does not
+#: know the page's current state, and applying would produce a change nobody can undo.
+_INVERSE_REQUIRED = (OpKind.MOVE_PAGE, OpKind.RENAME_PAGE, OpKind.SET_ICON)
 
 
 #: Operations that create blocks, and therefore only learn their inverse from the
@@ -139,9 +188,41 @@ def _stamp_inverse(op: Operation, response: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _execute(client: NotionClient, store, op: Operation) -> dict:
+#: A payload value of `{"from_op": "op_…", "key": "page_id"}` means "the id of the page
+#: that operation created". It exists because an organise patch both creates a hub and
+#: moves pages into it, and the hub's id is not known until the create has run.
+#:
+#: The alternative — apply the creates, re-sync, then plan the moves — would split one
+#: decision the reviewer made across two approvals, and the second half would be
+#: reviewed against a workspace that had already changed under it.
+REF_KEY = "from_op"
+
+
+def _resolve_refs(patch: Patch, op: Operation) -> dict:
+    """Replace deferred references in a payload with ids from already-applied ops.
+
+    Returns a copy; `op.payload` keeps the reference so the patch stays re-appliable
+    and the review UI can still say "into the hub created above" rather than showing a
+    raw id the reviewer has never seen.
+    """
+    payload = dict(op.payload)
+    for field_name, value in list(payload.items()):
+        if not (isinstance(value, dict) and REF_KEY in value):
+            continue
+        ref_id = value[REF_KEY]
+        source = next((o for o in patch.operations if o.op_id == ref_id), None)
+        resolved = (source.result or {}).get(value.get("key", "page_id")) if source else None
+        if not resolved:
+            raise ValueError(
+                f"{field_name} refers to operation {ref_id}, which has not produced "
+                "an id — it either failed or has not run yet")
+        payload[field_name] = resolved
+    return payload
+
+
+def _execute(client: NotionClient, store, op: Operation, patch: Patch | None = None) -> dict:
     """Perform one operation against Notion and return the raw response."""
-    p = op.payload
+    p = _resolve_refs(patch, op) if patch is not None else op.payload
 
     if op.kind is OpKind.APPEND_BLOCK:
         children = p.get("children")
@@ -176,7 +257,8 @@ def _execute(client: NotionClient, store, op: Operation) -> dict:
 
     if op.kind is OpKind.INSERT_FOOTNOTE:
         note = B.footnote_block(p.get("text", ""), p.get("source_title", ""),
-                                p.get("locator"), p.get("url"))
+                                p.get("locator"), p.get("url"),
+                                why=p.get("rationale"))
         parent = p.get("parent_page_id") or (store.get_block(op.target) or {}).get("page_id")
         if not parent:
             raise NotionError(400, "no_parent", f"cannot place a footnote for {op.target}")
@@ -204,6 +286,18 @@ def _execute(client: NotionClient, store, op: Operation) -> dict:
             f"↔ {label}")
         return client.append_children(op.target, [block])
 
+    if op.kind is OpKind.MOVE_PAGE:
+        parent = p.get("parent_page_id")
+        if not parent:
+            raise ValueError("a move needs a destination parent page")
+        return client.move_page(op.target, parent)
+
+    if op.kind is OpKind.RENAME_PAGE:
+        return client.rename_page(op.target, p.get("title", ""))
+
+    if op.kind is OpKind.SET_ICON:
+        return client.set_page_icon(op.target, p.get("icon"))
+
     raise ValueError(f"unhandled operation kind {op.kind}")
 
 
@@ -226,6 +320,12 @@ def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
         client.archive_page(target)
     elif kind == "restore_block":
         client.restore_block(target)
+    elif kind == OpKind.MOVE_PAGE.value:
+        client.move_page(target, payload["parent_page_id"])
+    elif kind == OpKind.RENAME_PAGE.value:
+        client.rename_page(target, payload.get("title", ""))
+    elif kind == OpKind.SET_ICON.value:
+        client.set_page_icon(target, payload.get("icon"))
     else:  # pragma: no cover - defensive
         raise ValueError(f"unhandled inverse kind {kind!r}")
 
@@ -236,7 +336,8 @@ def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
 
 
 def apply_patch(client: NotionClient, store, patch: Patch, *,
-                dry_run: bool = False, reviewer: str | None = None) -> ApplyResult:
+                dry_run: bool = False, reviewer: str | None = None,
+                journal=None) -> ApplyResult:
     """Apply a patch to Notion, recording everything needed to undo it.
 
     `dry_run=True` walks the whole patch, builds every inverse, and writes nothing —
@@ -254,12 +355,28 @@ def apply_patch(client: NotionClient, store, patch: Patch, *,
         if op.inverse is None:
             op.inverse = _build_inverse(store, op)
 
+        # A structural operation with no inverse is one whose undo does not exist —
+        # the page is not in the mirror, or it sits at the workspace top level, which
+        # Notion's move endpoint cannot restore it to. Refusing is the whole point:
+        # "every edit is exactly reversible" has to be enforced somewhere, and the
+        # applier is the last place it can be.
+        if op.kind in _INVERSE_REQUIRED and op.inverse is None:
+            result.failed += 1
+            result.errors.append(
+                f"{op.kind.value} {op.target[:8]}: refused — no inverse could be "
+                "computed. Either the page is not in the mirror (run `palimpsest "
+                "sync`), or it is a top-level page and Notion's API cannot move one "
+                "back to the workspace root.")
+            result.status = "partial"
+            log.error("refusing irreversible %s on %s", op.kind.value, op.target)
+            break
+
         if dry_run:
             result.applied += 1
             continue
 
         try:
-            response = _execute(client, store, op)
+            response = _execute(client, store, op, patch)
             _stamp_inverse(op, response)
             op.applied_at = time.time()
             result.applied += 1
@@ -281,6 +398,15 @@ def apply_patch(client: NotionClient, store, patch: Patch, *,
                         "anchor": op.payload.get("anchor"),
                         "op_id": op.op_id,
                     }])
+
+            # The same record, in Notion, where you will actually be when you ask why a
+            # sentence says what it says. Best-effort by construction: `record_change`
+            # swallows its own failures, because losing a log line must never be a
+            # reason to stop editing.
+            if journal is not None:
+                journal.record_change(
+                    op, patch_id=patch.patch_id, page=store.get_page(page_id),
+                    source=_source_row(store, patch.source_id), reviewer=reviewer)
         except (NotionError, ValueError) as e:
             # (4) Stop on first failure. `partial` is an honest status.
             result.failed += 1
@@ -299,7 +425,7 @@ def apply_patch(client: NotionClient, store, patch: Patch, *,
 
 
 def revert_patch(client: NotionClient, store, patch: Patch,
-                 reviewer: str | None = None) -> ApplyResult:
+                 reviewer: str | None = None, journal=None) -> ApplyResult:
     """Undo an applied patch, exactly.
 
     Operations invert in reverse order and only the ones that actually ran are
@@ -313,6 +439,14 @@ def revert_patch(client: NotionClient, store, patch: Patch,
         try:
             _execute_inverse(client, store, op.inverse)
             store.mark_op_reverted(op.op_id)
+            # A revert is a change too, and the journal must say so — a row that still
+            # reads "Applied" for an edit that was taken back is worse than no row.
+            if journal is not None:
+                journal.record_change(
+                    op, patch_id=patch.patch_id,
+                    page=store.get_page(_page_of(store, op.target) or op.target),
+                    source=_source_row(store, patch.source_id), reviewer=reviewer,
+                    status="Reverted")
             op.applied_at = None
             result.applied += 1
         except (NotionError, ValueError) as e:

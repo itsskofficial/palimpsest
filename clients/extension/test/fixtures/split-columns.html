@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Lecture 7 — Split layout</title></head>
+<body>
+  <header>Some Platform · 0:00 elapsed</header>
+  <!-- The awkward layout: timestamps in one column, the words in another. The common
+       ancestor of the timestamps is `.times`, which holds no prose at all — so the
+       scraper has to climb one level to `.cues` to pick up the speech. -->
+  <div class="player-shell">
+    <div class="cues">
+      <div class="times">
+        <div>0:04</div>
+        <div>0:52</div>
+        <div>2:31</div>
+        <div>5:08</div>
+      </div>
+      <div class="words">
+        <div>Entropy measures the average surprise of a distribution.</div>
+        <div>Cross entropy is the cost of coding one distribution with another's code.</div>
+        <div>KL divergence is exactly that excess cost, and it is never negative.</div>
+        <div>Minimising cross entropy therefore minimises KL to the true distribution.</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

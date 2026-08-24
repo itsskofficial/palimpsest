@@ -13,6 +13,19 @@ import pytest
 from palimpsest.store import open_store
 from palimpsest.types import Anchor, Claim, ClaimType, Source, new_id
 
+
+@pytest.fixture(autouse=True)
+def _hermetic_config(monkeypatch):
+    """Never let a developer's real `.env` or saved config leak into a test.
+
+    `Settings.load()` reads a persisted config file so a set-up machine stays set up —
+    which means, without this, a test on a machine that ran `palimpsest setup` would
+    silently inherit a real Notion token and a real bot token, and a test asserting
+    "nothing is configured" would instead make a live API call. Tests control their
+    environment through `monkeypatch`; the config file is switched off for all of them.
+    """
+    monkeypatch.setattr("palimpsest.config.load_env_file", lambda *a, **k: 0)
+
 ATTENTION = ("Scaled dot-product attention divides the logits by the square root of the "
              "key dimension, which keeps the gradient variance stable as the dimension "
              "grows.")

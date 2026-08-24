@@ -10,14 +10,24 @@ proposes small, reversible, fully-cited edits to the right pages.
 > learn, and every earlier layer stays readable.
 
 ```bash
-pip install -e ".[anthropic,serve]"
+pip install "palimpsest[all] @ git+https://github.com/itsskofficial/palimpsest.git"
+palimpsest serve
+```
 
-export NOTION_TOKEN=ntn_...
-export ANTHROPIC_API_KEY=sk-ant-...
+That's the whole setup. On a fresh machine `serve` drops you into a short terminal
+wizard that asks for your Claude, Notion and Telegram keys, **checks each one on the
+spot**, makes the single Notion page it works inside for you, and pairs your Telegram
+account by watching for your first message. Answers are saved to a config file it reads
+on every later start — nothing to edit by hand. Then message the bot and start talking
+to your notes.
 
+Prefer the command line? Everything the bot does is also a command:
+
+```bash
+palimpsest setup                      # re-run the wizard any time
+palimpsest agent "what did I write about attention?"
 palimpsest sync                       # mirror your Notion locally
 palimpsest sweep duplicates           # what you already wrote twice (no model needed)
-palimpsest ingest https://example.com/post
 palimpsest apply pch_… --reviewer sk  # the only command that writes
 palimpsest undo pch_…                 # exactly reversible
 ```
@@ -105,7 +115,9 @@ capture → normalise → extract claims → retrieve → classify relation
 
 | Layer | What it does | Notable |
 |---|---|---|
-| `ingest/` | URL, YouTube, PDF, image, CSV/Excel, raw text → normalised text **+ anchors** | Firecrawl when keyed, stdlib reader when not |
+| `ingest/` | URL, YouTube, PDF, image, CSV/Excel, audio, transcript, raw text → normalised text **+ anchors** | Firecrawl when keyed, stdlib reader when not |
+| `jobs.py` | the durable capture queue every surface posts to | a capture survives the window that made it |
+| `organise.py` | the *filing*: hubs, moves, renames — proposed, never performed | structural ops, each exactly reversible |
 | `extract.py` | text → atomic claims, each with a verbatim quote | claims whose quote isn't in the source are **discarded** |
 | `notion/mirror.py` | Notion → local mirror: pages, blocks, backlinks, page *roles* | incremental on `last_edited_time` |
 | `retrieve.py` | BM25 + bigrams over the mirror; two separate queries | pure Python, no key needed |
@@ -171,12 +183,142 @@ it **never hard-deletes** (strike-through and Notion's restorable trash only), a
 | `palimpsest apply <id> --reviewer <you>` | the only command that changes your notes |
 | `palimpsest undo <id>` | revert exactly |
 | `palimpsest sweep <kind>` | `duplicates` · `contradictions` · `stale` · `questions` |
+| `palimpsest telegram` | the bot: message it anything |
+| `palimpsest organise` | propose a shape for the workspace. **Writes nothing.** |
 | `palimpsest serve` | the review app on `:8100` |
 | `palimpsest history <page_id>` | every applied change to a page |
 | `palimpsest provenance <block_id>` | which source produced this text |
 | `palimpsest status` | config, mirror size, and anything that looks wrong |
 | `palimpsest db check\|migrate\|sql\|reset` | schema management |
 | `palimpsest supabase status\|init\|env\|url` | local or cloud Supabase |
+
+## The filing, not just the prose
+
+A knowledge base decays in two independent ways. The prose drifts — which is what the
+seven relations fix — and the *filing* drifts: pages pile up at the top level because
+creating one there is the path of least resistance, six pages on one subject end up in
+five places, half of them are called "Notes".
+
+No amount of editing prose fixes that, because the problem is not inside any page. So
+`organise` plans the shape, and emits the same kind of object everything else here
+emits — a patch of small typed operations with exact inverses:
+
+```bash
+palimpsest organise           # proposes hubs, moves, renames. Writes nothing.
+palimpsest apply pch_… --reviewer sk
+palimpsest undo pch_…         # the pages go back where they were
+```
+
+`move_page`, `rename_page` and `set_icon` invert from the mirror, which already knows
+each page's parent, title and icon. There is deliberately no "restructure workspace"
+operation, for the same reason there is no `rewrite_page`.
+
+**One thing it refuses to do.** Notion's move endpoint takes a page or a data source and
+has no workspace destination, so a page currently at the top level can be filed into a
+hub but never moved back out by the API. That operation has no inverse, so palimpsest
+will not perform it — such pages become review items explaining the one-way door instead.
+
+## Every change, and why, inside Notion
+
+The ledger that makes `undo` real lives in SQLite, where you cannot see it. But the
+question people actually ask — *why does this sentence say that, and who decided?* — gets
+asked in Notion, six months later, on a phone. So the ledger is mirrored into two
+databases under your root page:
+
+| `palimpsest · Changes` | one row per applied edit |
+|---|---|
+| `Why` | the classifier's own reasoning for this claim against this block |
+| `Relation` | which of the seven produced it, colour-coded by risk |
+| `Confidence` | sort by it to find the close calls |
+| `Source` · `Cites` | where it came from, and the exact anchor |
+| `Approved by` · `Patch` | who said yes, and the id that reverts it |
+| `Status` | `Applied` or `Reverted` |
+
+`palimpsest · Sources` is one row per thing you fed it, with how many claims came out
+and how many edits landed. Filter Changes to every `supersedes` you ever accepted, or
+read one page's history without leaving Notion.
+
+The same reasoning also goes into the footnote on the page itself, next to the sentence
+it explains — because nobody runs `palimpsest provenance` on a block.
+
+A journal write can never fail an edit: the row goes in after the operation succeeded,
+and its failure is swallowed. Losing a log line is a nuisance; refusing to edit your
+notes because the log line failed would be absurd.
+
+## The agent
+
+Talk to your notes. The agent turns palimpsest from a pipeline you feed into something
+you converse with — over Telegram, or from the terminal:
+
+```bash
+palimpsest agent "what do my notes say about attention scaling?"
+palimpsest telegram          # the same agent, on your phone
+```
+
+Two things, and only two:
+
+- **Send it anything** — a link, a file, a voice note, a thought — and the knowledge
+  base updates.
+- **Ask it anything** — and it answers *from your notes*, with page citations.
+
+It has a bounded tool surface (search, read, capture, sweep, organise, apply) and it
+**never writes to Notion directly**. Every edit goes through one gate: operations within
+your `PALIMPSEST_AUTONOMY` setting apply; everything else is *held* for a tap. The agent
+cannot raise its own autonomy, cannot force a held edit through, and cannot apply a
+contradiction — those are locked in code, not just asked for in the prompt, and the
+guarantees are pinned by [`tests/unit/test_safety.py`](tests/unit/test_safety.py), which
+must pass at 100%.
+
+| Layer | What |
+|---|---|
+| `agent/` | the loop, the 15-tool registry, memory, the system prompt |
+| `approval.py` | the one gate every write passes through |
+| `evals/` | per-relation precision/recall, weighted so a missed contradiction dominates |
+| `trace.py` | Langfuse tracing — every call, no-op without keys |
+
+Measurement, and how autonomy earns its raise:
+
+```bash
+palimpsest eval bootstrap    # turn your Approve/Reject history into labelled examples
+palimpsest eval component    # per-relation precision & recall against that golden set
+```
+
+The golden set is a **test set, not training data** — nothing is fine-tuned. It grows
+for free from every approval you make, and it is the number the autonomy ladder is meant
+to rest on rather than being set by hand.
+
+## Capture surfaces
+
+A Telegram bot, a browser extension, and a desktop app — all thin wrappers over the
+same queue:
+
+```bash
+palimpsest telegram      # or just `palimpsest serve`, which starts it too
+```
+
+**The bot is the one you will use most.** Send it a link, a PDF, a voice note, a
+screenshot, or a paragraph you typed. Minutes later it tells you what changed: how many
+citations it added on its own, and what it wants you to decide — with the reasoning, and
+Apply/Reject buttons.
+
+An allowlist is mandatory. A bot token is a bearer credential, so an unpaired chat is
+refused and told its own id; you add it and restart. There is deliberately no
+first-message-wins pairing, because that is a race anyone can win by finding your bot
+before you do.
+
+```bash
+cd clients/desktop && npm install && npm start    # Ctrl+Shift+Space, anywhere
+# chrome://extensions → Load unpacked → clients/extension
+```
+
+The extension sends a YouTube **link** (the server fetches better captions than a page
+scrape would), reads the **transcript off the page** on Udemy and Coursera where the
+server cannot log in, and sends the **URL** everywhere else. See
+[clients/README.md](clients/README.md).
+
+Both post to `POST /v1/jobs` rather than `/v1/ingest`, because ingestion takes minutes
+and a popup does not live that long. The queue is durable, so a capture interrupted by a
+crash is re-queued rather than lost.
 
 ## The review app
 
@@ -198,8 +340,10 @@ Nothing is required to *look*; two keys are required to be useful. See
 | Variable | Needed for |
 |---|---|
 | `NOTION_TOKEN` | everything that touches Notion |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_CHATS` | the bot. The allowlist is not optional |
 | `ANTHROPIC_API_KEY` | extraction, classification, contradiction sweep |
-| `FIRECRAWL_API_KEY` | better web extraction (falls back to a stdlib reader) |
+| `DEEPGRAM_API_KEY` / `GROQ_API_KEY` / `SARVAM_API_KEY` | audio. Any one. **No offline fallback** — a recording fails rather than becoming an empty source |
+| `FIRECRAWL_API_KEY` | JavaScript-rendered pages and bot-blocked hosts (falls back to a stdlib reader) |
 | `PALIMPSEST_DATABASE_URL` | defaults to `sqlite:///palimpsest.db` |
 | `PALIMPSEST_ARTIFACT_URL` | `file://./archive`, `s3://…`, or `supabase://…` |
 | `PALIMPSEST_APPLY` / `PALIMPSEST_AUTONOMY` | permission to write |

@@ -143,15 +143,26 @@ def install(app, settings, metrics: Metrics) -> None:
     from fastapi import Request
     from fastapi.responses import JSONResponse
 
-    if settings.cors_origins:
+    # A browser extension calls from `chrome-extension://<id>`, and the id is generated
+    # when the extension is loaded — so it cannot be enumerated in advance and has to be
+    # matched. This is defaulted only for a local-only bind: on `127.0.0.1` the API is
+    # already reachable by anything running on the machine, so the regex grants nothing
+    # new. A public bind gets no default and must set the variable deliberately.
+    origin_regex = settings.cors_origin_regex
+    if origin_regex is None and settings.is_local_only:
+        origin_regex = r"^(chrome-extension|moz-extension|safari-web-extension)://.*$"
+
+    if settings.cors_origins or origin_regex:
         from fastapi.middleware.cors import CORSMiddleware
 
         app.add_middleware(
             CORSMiddleware,
             allow_origins=list(settings.cors_origins),
+            allow_origin_regex=origin_regex,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            expose_headers=["X-Request-ID"],
         )
 
     max_body = 32 * 1024 * 1024

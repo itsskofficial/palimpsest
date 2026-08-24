@@ -177,7 +177,16 @@ class Model:
         started = time.perf_counter()
         response = self._call(params)
         elapsed = time.perf_counter() - started
-        self.usage.add(task, getattr(response, "usage", None), elapsed)
+        usage = getattr(response, "usage", None)
+        self.usage.add(task, usage, elapsed)
+
+        # Trace the call. `trace` is a no-op without Langfuse keys, so this line costs
+        # nothing off and never fails an ingest — the whole point of that module.
+        from palimpsest import trace
+
+        trace.generation(task, model=self.model, usage=usage,
+                         metadata={"effort": effort, "seconds": round(elapsed, 2),
+                                   "cached": bool(cache_prefix)})
 
         # Always check stop_reason before touching content: a refusal is HTTP 200 with
         # an empty or partial content array.
@@ -204,6 +213,45 @@ class Model:
             # With output_config.format this should be unreachable; if the schema is
             # ever dropped it becomes the failure mode, so it fails loudly.
             raise ModelError(f"{task}: response was not valid JSON: {text[:200]}") from e
+
+    # -- conversation with tools (the agent) -----------------------------------
+
+    def message(self, *, system: Any, messages: list, tools: list | None = None,
+                effort: str = "high", max_tokens: int | None = None,
+                thinking: bool = True, task: str = "agent") -> Any:
+        """One raw turn with tools, for the agent loop. Returns the SDK response.
+
+        Unlike `json()`, this returns the whole response — thinking blocks, tool_use
+        blocks and all — because the caller must append it verbatim to the message list
+        for the next turn, or the model loses its own reasoning and tool calls.
+        """
+        params: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens or self.max_tokens,
+            "system": system,
+            "messages": messages,
+            "output_config": {"effort": effort},
+        }
+        if tools:
+            params["tools"] = tools
+        if thinking:
+            params["thinking"] = {"type": "adaptive", "display": "summarized"}
+
+        started = time.perf_counter()
+        # Tools + server-side fallbacks together are more surface than we need here, and
+        # a refusal in a conversational turn is handled by the loop, not by re-serving.
+        response = self.client.messages.create(**params)
+        elapsed = time.perf_counter() - started
+        usage = getattr(response, "usage", None)
+        self.usage.add(task, usage, elapsed)
+
+        from palimpsest import trace
+
+        trace.generation(task, model=self.model, usage=usage,
+                         metadata={"effort": effort,
+                                   "stop_reason": getattr(response, "stop_reason", None),
+                                   "seconds": round(elapsed, 2)})
+        return response
 
     # -- transport -------------------------------------------------------------
 

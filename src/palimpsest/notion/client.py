@@ -273,3 +273,102 @@ class NotionClient:
 
     def archive_page(self, page_id: str) -> dict:
         return self._request("PATCH", f"pages/{page_id}", {"archived": True})
+
+    def update_page(self, page_id: str, payload: dict) -> dict:
+        """Patch a page's own attributes — title, icon, cover.
+
+        Note that `parent` is *not* accepted here. Notion documents plainly that "a
+        page's parent cannot be changed" through this endpoint; moving is a separate
+        call, below.
+        """
+        return self._request("PATCH", f"pages/{page_id}", payload)
+
+    def rename_page(self, page_id: str, title: str) -> dict:
+        """Set a page's title.
+
+        The property is keyed `title` because these are page-parented pages. A row in a
+        database keys its title by whatever that database called the column, which is
+        why the organiser only ever renames pages whose parent is a page.
+        """
+        return self.update_page(page_id, {
+            "properties": {
+                "title": {"title": [{"type": "text", "text": {"content": title[:2000]}}]}
+            }
+        })
+
+    def set_page_icon(self, page_id: str, icon: str | None) -> dict:
+        """Set or clear a page's emoji icon. `None` clears it, which is the inverse of
+        setting one on a page that had none."""
+        body = {"icon": {"type": "emoji", "emoji": icon} if icon else None}
+        return self.update_page(page_id, body)
+
+    # -- databases -------------------------------------------------------------
+    #
+    # The 2025-09-03 release split a database into a container plus one or more *data
+    # sources*. Rows are created against a `data_source_id`, never the `database_id` —
+    # sending the latter works today on a single-source database and breaks the moment
+    # a second source is added, which is the kind of failure that surfaces months later.
+
+    def create_database(self, parent_page_id: str, title: str,
+                        properties: dict, icon: str | None = None,
+                        description: str | None = None) -> dict:
+        """Create a database. The property schema goes inside `initial_data_source`."""
+        body: dict[str, Any] = {
+            "parent": {"type": "page_id", "page_id": parent_page_id},
+            "title": [{"type": "text", "text": {"content": title[:2000]}}],
+            "initial_data_source": {"properties": properties},
+        }
+        if icon:
+            body["icon"] = {"type": "emoji", "emoji": icon}
+        if description:
+            body["description"] = [{"type": "text", "text": {"content": description[:2000]}}]
+        return self._request("POST", "databases", body)
+
+    def get_database(self, database_id: str) -> dict:
+        return self._request("GET", f"databases/{database_id}")
+
+    def data_source_id(self, database: dict) -> str | None:
+        """The first data source of a created or fetched database."""
+        sources = database.get("data_sources") or []
+        return (sources[0].get("id") or "").replace("-", "") if sources else None
+
+    def create_row(self, data_source_id: str, properties: dict,
+                   children: list[dict] | None = None,
+                   icon: str | None = None) -> dict:
+        """Add a row to a database."""
+        body: dict[str, Any] = {
+            "parent": {"type": "data_source_id", "data_source_id": data_source_id},
+            "properties": properties,
+        }
+        if children:
+            body["children"] = children[:MAX_APPEND]
+        if icon:
+            body["icon"] = {"type": "emoji", "emoji": icon}
+        return self._request("POST", "pages", body)
+
+    def query_data_source(self, data_source_id: str, filter_: dict | None = None,
+                          sorts: list[dict] | None = None) -> Iterator[dict]:
+        body: dict[str, Any] = {}
+        if filter_:
+            body["filter"] = filter_
+        if sorts:
+            body["sorts"] = sorts
+        yield from self._paginate("POST", f"data_sources/{data_source_id}/query", body)
+
+    def move_page(self, page_id: str, parent_page_id: str) -> dict:
+        """Move a page under a different parent page.
+
+        This is a dedicated endpoint (`POST /v1/pages/{id}/move`), not a field on the
+        page patch — Notion added it separately and the patch route still refuses a
+        `parent`. Sending it the other way is a silent no-op on the parent, which looks
+        like a move that did nothing.
+
+        **It cannot move a page back to the workspace top level.** The body takes a
+        `page_id` or a `data_source_id` and there is no workspace variant, so a page
+        currently parented by the workspace can be filed *into* a hub but not restored
+        by this API. `plan_move` refuses to emit such an operation for exactly that
+        reason: an edit whose inverse does not exist is not one this project performs.
+        """
+        return self._request("POST", f"pages/{page_id}/move", {
+            "parent": {"type": "page_id", "page_id": parent_page_id}
+        })

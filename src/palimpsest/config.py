@@ -18,10 +18,68 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-__all__ = ["Settings", "load", "redact"]
+__all__ = ["Settings", "config_path", "load", "load_env_file", "redact"]
+
+
+def config_path() -> Path:
+    """Where the persisted config lives, so `serve` finds it wherever it is run from.
+
+    A fixed per-user location, not the working directory — a service started by systemd
+    or a container has no meaningful cwd, and a config that only loads when you happen to
+    launch from the right folder is a config that mysteriously stops working. Honours
+    `PALIMPSEST_CONFIG` for an explicit override, then the XDG / APPDATA convention.
+    """
+    override = os.environ.get("PALIMPSEST_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "palimpsest" / "config.env"
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "palimpsest" / "config.env"
+
+
+def load_env_file(path: Path | None = None) -> int:
+    """Populate `os.environ` from the persisted config file. Returns how many keys set.
+
+    A real environment variable always wins over the file — so a container passing
+    `NOTION_TOKEN` in its own environment is never shadowed by a stale saved value. Also
+    reads a `.env` in the current directory, which is the convenient thing during
+    development. Never raises: a missing or malformed file just means nothing is loaded.
+    """
+    # An explicit config location (the arg, or PALIMPSEST_CONFIG) means "use exactly
+    # this" — the ambient `./.env` is a dev convenience only for when nothing was named.
+    # Reading both would let a stray `.env` in the working directory shadow a config the
+    # operator pointed at on purpose.
+    if path is not None:
+        candidates = [path]
+    elif os.environ.get("PALIMPSEST_CONFIG"):
+        candidates = [config_path()]
+    else:
+        candidates = [config_path(), Path(".env")]
+
+    loaded = 0
+    for candidate in candidates:
+        if candidate is None or not candidate.is_file():
+            continue
+        try:
+            for line in candidate.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:   # real env wins
+                    os.environ[key] = value
+                    loaded += 1
+        except OSError:
+            continue
+    return loaded
 
 _SECRET_HINTS = ("key", "secret", "password", "token", "dsn", "url", "credential")
 
@@ -63,6 +121,26 @@ def _int(name: str, default: int) -> int:
         raise ValueError(f"{name} must be an integer, got {raw!r}") from None
 
 
+def _chat_ids(raw: str) -> tuple[int, ...]:
+    """Parse `TELEGRAM_ALLOWED_CHATS`, ignoring anything that is not an id.
+
+    Chat ids are negative for groups, so the minus sign is meaningful and must survive.
+    """
+    out: list[int] = []
+    for part in raw.replace(" ", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            raise ValueError(
+                f"TELEGRAM_ALLOWED_CHATS contains {part!r}, which is not a chat id. "
+                "Message the bot once and it will reply with yours."
+            ) from None
+    return tuple(out)
+
+
 def _float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     try:
@@ -98,13 +176,30 @@ class Settings:
     firecrawl_api_key: str | None = None
     openai_api_key: str | None = None
     embed_model: str = "text-embedding-3-small"
+    #: Speech to text. Whichever key is set is used, in this order, unless
+    #: `PALIMPSEST_TRANSCRIBE` names one. There is no offline fallback on purpose: a
+    #: transcript you did not get is not a source.
+    deepgram_api_key: str | None = None
+    groq_api_key: str | None = None
+    sarvam_api_key: str | None = None
+    transcribe_provider: str | None = None
 
     # -- behaviour -------------------------------------------------------------
     apply: bool = False
     autonomy: str = "none"
+    #: Mirror the ledger into two Notion databases, so "why does this say that" is
+    #: answerable from Notion rather than only from SQLite.
+    journal: bool = True
     min_confidence: float = 0.75
     max_candidates: int = 8
     footnotes: bool = True
+
+    # -- the bot ---------------------------------------------------------------
+    telegram_token: str | None = None
+    #: Chat ids allowed to talk to the bot. A bot token is a bearer credential — anyone
+    #: who finds the bot can message it — so an empty allowlist refuses everyone and
+    #: tells each caller its own id, which is the pairing flow.
+    telegram_allowed_chats: tuple[int, ...] = ()
 
     # -- the server ------------------------------------------------------------
     host: str = "127.0.0.1"
@@ -112,6 +207,15 @@ class Settings:
     api_key: str | None = None
     allow_insecure: bool = False
     cors_origins: tuple[str, ...] = ()
+    #: A browser extension's origin is `chrome-extension://<id>`, and the id is not
+    #: known until the extension is loaded — so it cannot be listed ahead of time and
+    #: has to be matched. Defaulted only for a local-only bind, where the origin is
+    #: already reachable by anything on the machine; a public bind must say so
+    #: explicitly rather than inherit a permissive default it did not choose.
+    cors_origin_regex: str | None = None
+    #: Worker threads draining the capture queue. Two is enough for a personal
+    #: workspace: ingestion is dominated by waiting on the model, not by local CPU.
+    workers: int = 2
     log_json: bool = False
     log_level: str = "info"
     metrics: bool = True
@@ -123,6 +227,9 @@ class Settings:
 
     @classmethod
     def load(cls, **overrides) -> Settings:
+        # Persisted config fills any gap the real environment left, so a machine that
+        # ran the setup wizard once is configured every time thereafter.
+        load_env_file()
         origins = os.environ.get("PALIMPSEST_CORS_ORIGINS", "")
         roots = os.environ.get("PALIMPSEST_NOTION_ROOTS", "")
         settings = cls(
@@ -141,8 +248,16 @@ class Settings:
             firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY") or None,
             openai_api_key=os.environ.get("OPENAI_API_KEY") or None,
             embed_model=os.environ.get("PALIMPSEST_EMBED_MODEL", "text-embedding-3-small"),
+            deepgram_api_key=os.environ.get("DEEPGRAM_API_KEY") or None,
+            groq_api_key=os.environ.get("GROQ_API_KEY") or None,
+            sarvam_api_key=os.environ.get("SARVAM_API_KEY") or None,
+            transcribe_provider=os.environ.get("PALIMPSEST_TRANSCRIBE") or None,
             apply=_bool("PALIMPSEST_APPLY", False),
             autonomy=os.environ.get("PALIMPSEST_AUTONOMY", "none").lower(),
+            journal=_bool("PALIMPSEST_JOURNAL", True),
+            telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN") or None,
+            telegram_allowed_chats=_chat_ids(
+                os.environ.get("TELEGRAM_ALLOWED_CHATS", "")),
             min_confidence=_float("PALIMPSEST_MIN_CONFIDENCE", 0.75),
             max_candidates=_int("PALIMPSEST_MAX_CANDIDATES", 8),
             footnotes=_bool("PALIMPSEST_FOOTNOTES", True),
@@ -151,6 +266,8 @@ class Settings:
             api_key=os.environ.get("PALIMPSEST_API_KEY") or None,
             allow_insecure=_bool("PALIMPSEST_ALLOW_INSECURE"),
             cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
+            cors_origin_regex=os.environ.get("PALIMPSEST_CORS_ORIGIN_REGEX") or None,
+            workers=_int("PALIMPSEST_WORKERS", 2),
             log_json=_bool("PALIMPSEST_LOG_JSON"),
             log_level=os.environ.get("PALIMPSEST_LOG_LEVEL", "info").lower(),
             metrics=_bool("PALIMPSEST_METRICS", True),
@@ -190,6 +307,21 @@ class Settings:
     @property
     def has_notion(self) -> bool:
         return bool(self.notion_token)
+
+    @property
+    def transcriber(self) -> str | None:
+        """Which speech-to-text provider a recording would go to, if any.
+
+        Order is deliberate: Deepgram handles long files and labels speakers, Groq is
+        the cheapest start but caps at 25 MB, Sarvam is the one that copes with
+        Hinglish. An explicit `PALIMPSEST_TRANSCRIBE` overrides all of it.
+        """
+        available = {"deepgram": self.deepgram_api_key, "groq": self.groq_api_key,
+                     "sarvam": self.sarvam_api_key}
+        if self.transcribe_provider:
+            chosen = self.transcribe_provider.lower()
+            return chosen if available.get(chosen) else None
+        return next((name for name, key in available.items() if key), None)
 
     def may_auto_apply(self, risk: str) -> bool:
         """Whether a relation of this risk tier may be applied without a human.
@@ -263,6 +395,10 @@ class Settings:
             "model": self.model if self.has_model else f"{self.model} (no key)",
             "effort": {"extract": self.extract_effort, "classify": self.classify_effort},
             "firecrawl": "configured" if self.firecrawl_api_key else "off (stdlib fallback)",
+            "transcribe": self.transcriber or "MISSING (audio cannot be ingested)",
+            "telegram": (f"paired with {len(self.telegram_allowed_chats)} chat(s)"
+                         if self.telegram_token else "off"),
+            "journal": "on (Notion databases)" if self.journal else "off (SQLite only)",
             "embeddings": "openai" if self.openai_api_key else "lexical (built-in)",
             "apply": self.apply,
             "autonomy": self.autonomy,
@@ -290,6 +426,17 @@ class Settings:
         if self.uses_postgres and self.uses_pooler:
             out.append("database URL is a transaction pooler (6543): correct for the service, "
                        "but run `palimpsest db migrate --url <direct 5432 URL>` for migrations")
+        if self.telegram_token and not self.telegram_allowed_chats:
+            out.append("TELEGRAM_BOT_TOKEN is set but TELEGRAM_ALLOWED_CHATS is empty — "
+                       "the bot will refuse every chat and reply with its id, which is "
+                       "how you pair it")
+        if self.journal and not self.notion_root_pages:
+            out.append("PALIMPSEST_JOURNAL is on but PALIMPSEST_NOTION_ROOTS is not set — "
+                       "there is nowhere to create the Changes and Sources databases, so "
+                       "the ledger stays in SQLite only")
+        if self.transcribe_provider and not self.transcriber:
+            out.append(f"PALIMPSEST_TRANSCRIBE={self.transcribe_provider} but its key is "
+                       "not set — recordings will fail rather than fall back")
         if self.apply and self.autonomy != "none":
             out.append(f"apply=on and autonomy={self.autonomy}: {self.autonomy}-risk relations "
                        "will be written to Notion without review (contradictions never are)")

@@ -280,6 +280,189 @@ during your first full sync.
 
 ---
 
+## 17. Filing is a separate planner, with three structural operations
+
+**Decision.** `organise.py` plans *where pages live* and emits `move_page`,
+`rename_page` and `set_icon` alongside the existing `create_page`. It is a planner like
+`plan.py` — an import-linter contract forbids it from importing the write path.
+
+**Why a separate module.** The two kinds of decay are independent. `plan.py` answers
+"how does this claim relate to what I wrote"; nothing in that vocabulary can express
+"these six pages are the same subject scattered across five parents". Overloading the
+relation classifier with structure would have made a well-measured thing worse at both.
+
+**Rejected: a `restructure` operation.** Same reasoning as `rewrite_page` in §5. A
+reviewer can meaningfully approve "move *Backpropagation* from *Cooking* to *Machine
+Learning*". Nobody can meaningfully approve "reorganise my workspace".
+
+**Consequence — one-way doors are refused, not taken.** Notion's move endpoint accepts a
+page or a data source as the destination, and has no workspace variant. A page currently
+parented by the workspace root can therefore be filed *into* a hub and never moved back
+out through the API. `_build_inverse` returns `None` for that case and the applier
+refuses the operation outright rather than performing it, which is the same rule as
+everywhere else: an edit whose inverse does not exist is not one this project performs.
+The organiser surfaces those pages as review items explaining the door instead.
+
+**Ordering.** An organise patch creates a hub *and* files pages into it, but the hub's
+Notion id does not exist when the patch is written. A payload may therefore carry
+`{"from_op": "op_…", "key": "page_id"}`, resolved by the applier from the earlier
+operation's response. The alternative — apply the creates, re-sync, plan the moves — would
+split one decision the reviewer made across two approvals, and the second half would be
+reviewed against a workspace that had already changed underneath it.
+
+---
+
+## 18. Capture is queued, and the queue is durable
+
+**Decision.** Interactive surfaces post to `POST /v1/jobs`, which writes a row and
+returns an id in milliseconds. Workers drain it. `POST /v1/ingest` stays synchronous for
+scripts that want the patch in the response.
+
+**Why.** Ingestion is tens of seconds to minutes. A browser popup is destroyed the
+instant you click away, so a synchronous request is cancelled mid-extraction; a desktop
+drop of nine PDFs cannot hold a socket for twenty minutes.
+
+**Rejected: an in-process queue.** The failure mode that matters for a capture tool is
+losing something you told it to remember — you believe it has the link, it does not, and
+you find out never. A row survives the process; a `deque` does not. `requeue_stale_jobs()`
+on startup completes the guarantee for jobs that were mid-flight when the machine died.
+
+**Auto-apply lives in the job handler.** `plan.py` has already routed contradictions and
+anything below the confidence floor to `review`, so the remaining rule is small: apply
+what the autonomy ladder permits, hold the rest under its own patch id. Splitting rather
+than holding all-or-nothing matters — a source usually yields six obvious citations and
+one `supersedes` worth a look, and holding the six hostage to the one is how a review
+queue becomes something you stop opening.
+
+---
+
+## 19. Timestamped sources merge their text but not their anchors
+
+**Decision.** `merge_cues` joins caption cues into ~900-character passages for the
+extractor, and emits **one segment per cue** for anchoring.
+
+**Why the two differ.** They do different jobs. A single caption cue is a few words —
+too short for a claim to sit inside, hence the merge. But segments map a claim's
+character offset back to a moment, and emitting them per passage means every claim in a
+900-character span cites whatever was being said at the start of it. On a dense lecture
+that is a citation confidently off by a minute, and it is invisible until someone clicks
+a footnote and lands in the wrong place. The passage is built from cues whose offsets
+are known anyway, so per-cue anchoring costs nothing.
+
+**Found by running it**, not by reading it: a three-cue test transcript produced four
+claims that all cited `0:15`, including one drawn from `2:40`.
+
+---
+
+## 20. The ledger is mirrored into Notion, because that is where the question is asked
+
+**Decision.** Every applied operation writes a row to a `palimpsest · Changes` database
+under the root page, carrying the classifier's rationale in a `Why` column. The same
+rationale goes into the footnote on the page itself. A second database records sources.
+
+**Why not leave it in SQLite.** The local ledger is what makes `undo` real, and it is
+completely invisible from the tool you read your notes in. `palimpsest provenance
+<block_id>` exists, works, and nobody will ever run it — because the question is not
+asked at a terminal. It is asked six months later, in Notion, on a phone, looking at a
+sentence and wondering why it says that. An answer that requires a laptop and a block id
+is not an answer.
+
+**Rejected: a Notion page of appended log lines.** A database is filterable and
+sortable, and those are the operations that make a change log useful — every
+`supersedes` you ever accepted, or everything applied below 0.8 confidence. Appending to
+a page gives you a document that grows forever and answers nothing.
+
+**Consequence — the rationale had to become part of the operation.** It was previously
+in the `judgements` table only, and reached exactly one payload by accident. `plan()`
+now stamps `rationale` and `confidence` onto every operation it emits, in one place
+rather than in each of the seven builders.
+
+**A journal failure never fails a patch.** The row is written after the operation
+succeeded, inside a `try` that swallows everything. A log that can refuse your edits is
+worse than no log.
+
+---
+
+## 21. The bot long-polls, and its allowlist is not optional
+
+**Decision.** `telegram.py` uses `getUpdates`, not a webhook, and refuses every chat not
+named in `TELEGRAM_ALLOWED_CHATS`.
+
+**Why long polling.** A webhook needs a public HTTPS endpoint. For a tool that runs on a
+laptop that means a tunnel, a certificate, and something that breaks whenever the IP
+changes. One idle connection with a 25-second timeout works behind any NAT with no
+infrastructure at all, and the traffic is a handful of messages a day.
+
+**Why the allowlist is mandatory.** A bot token is a bearer credential and a bot's
+username is discoverable. Without the guard, anyone who finds it can write to your
+Notion. An unrecognised chat is told its own id — which it already knows — and nothing
+else happens.
+
+**Rejected: first-message-wins pairing.** It is the friendlier flow and it is a race
+that an attacker wins by finding your bot before you open Telegram. Pairing costs one
+copy-paste and a restart; the failure it prevents is someone else's content in your
+notes, attributed to you.
+
+**The bot shares the server's process and queue** rather than running its own. Two
+queues against one SQLite file would both be correct and would double every worker, and
+the desktop app would be supervising a backend while a second one ran beside it.
+
+---
+
+## 22. The agent orchestrates; it never writes directly
+
+**Decision.** The agent has a bounded tool surface and no `write_to_notion` tool. Every
+edit it proposes goes through `palimpsest.approval.gate`, which applies only what the
+autonomy setting permits and holds the rest for a human tap.
+
+**Why not give it the write path.** A tool whose effect cannot be rendered as a diff is
+one neither a reviewer nor an eval can check — the same reasoning as §5's rejection of
+`rewrite_page`. Constraining the surface is not a limit on the agent; it is what makes
+the agent safe to run unattended and what gives the evals a ground truth to measure.
+
+**Manual loop, not the SDK Tool Runner.** Three things need control the runner does not
+give cleanly: a Langfuse span per tool call, a tool that can hold an edit for approval
+mid-turn, and mixing the server-side `web_search` tool with local ones. The loop it
+replaces is ~30 lines.
+
+**Not LangChain or LangGraph.** LangChain's provider abstraction would hide the
+Claude-specific features the pipeline depends on (structured outputs, cache breakpoints,
+per-task effort). LangGraph's two main draws already exist here — durable execution is
+the `jobs` table, and the "graph" today is one node. Either would add a dependency that
+breaks the `dependencies = []` contract for no capability the project lacks. Revisit if
+this goes multi-agent or grows real branching.
+
+---
+
+## 23. One gate, three locks, imported by planners never
+
+**Decision.** `palimpsest.approval` is the single path from a proposed patch to Notion,
+used by both capture and the agent. Contradictions are refused before anything else;
+`PALIMPSEST_APPLY=0` holds everything; autonomy gates the rest; held operations are split
+under one approval, not stranded whole.
+
+**Enforced, not intended.** The same import-linter contract that forbids planners from
+importing `notion.apply` now also forbids importing `approval`. A module that proposes
+edits must not be able to reach the thing that lets them through. And the safety
+properties are pinned offline in `tests/unit/test_safety.py` — the whole autonomy matrix,
+the absence of any tool argument that could flip a permission, the prompt's stated limits
+— so the merge gate is deterministic rather than a hope about model behaviour.
+
+---
+
+## 24. Observability that is never load-bearing
+
+**Decision.** `trace.py` wraps Langfuse so every model call, tool call and agent turn is
+traceable, correlated by patch/job/chat id. Absence is the normal case handled first: no
+keys means no-op, a tracing failure never propagates, and secrets are masked before they
+leave the process.
+
+**Why the discipline.** The mirror, the sweeps and `undo` must keep working with no
+Langfuse, no keys, no network — the same day-one property as §14. Tracing that could fail
+an ingest would quietly become a dependency the offline story forbids.
+
+---
+
 ## Known limitations
 
 - **Extraction quality is the ceiling.** Bad claims poison everything downstream. There
