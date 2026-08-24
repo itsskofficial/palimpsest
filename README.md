@@ -10,7 +10,7 @@ proposes small, reversible, fully-cited edits to the right pages.
 > learn, and every earlier layer stays readable.
 
 ```bash
-pip install "palimpsest[all] @ git+https://github.com/itsskofficial/palimpsest.git"
+pip install "palimpsest-notion[all] @ git+https://github.com/itsskofficial/palimpsest.git"
 palimpsest serve
 ```
 

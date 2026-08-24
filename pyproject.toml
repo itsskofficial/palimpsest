@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "palimpsest"
+name = "palimpsest-notion"
 version = "0.1.0"
 description = "A self-maintaining knowledge base on top of Notion: extracts claims from anything, classifies how each one relates to what you already wrote, and applies small reversible patches with full provenance."
 readme = "README.md"
@@ -79,7 +79,7 @@ dev = [
     "anthropic>=0.69",
     "langfuse>=3.0",
 ]
-all = ["palimpsest[anthropic,embed,pdf,tabular,serve,postgres,aws,agent]"]
+all = ["palimpsest-notion[anthropic,embed,pdf,tabular,serve,postgres,aws,agent]"]
 
 [project.urls]
 Homepage = "https://github.com/itsskofficial/palimpsest"
