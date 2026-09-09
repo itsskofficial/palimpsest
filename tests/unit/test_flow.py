@@ -584,3 +584,72 @@ class _NoStore:
 
     def get_block(self, block_id):
         return None
+
+
+def test_the_root_container_never_receives_loose_content():
+    """The root page holds everything; it is not a place to put anything.
+
+    Retrieval offers it as a candidate like any other page — it has a title, and once the
+    journal databases live on it, blocks — so the classifier reasonably names it, and
+    every claim with no better home lands there as a bullet. Found live: one Wikipedia
+    article put three orphan bullets and their citation callouts on the top-level page.
+    Three captures in, the top of the workspace is a bin.
+
+    Those claims fall through to the create-page path instead, which is where the
+    composer is already writing a page for exactly this material.
+    """
+    from palimpsest.plan import plan
+    from palimpsest.types import (
+        Claim,
+        ClaimType,
+        Judgement,
+        OpKind,
+        Relation,
+        Source,
+        new_id,
+    )
+
+    source = Source(source_id=new_id("src_"), kind="url", title="An article", text="x")
+    claim = Claim(claim_id=new_id("clm_"), text="An orphan fact.",
+                  type=ClaimType.FACT, topics=("vectors",))
+    judgement = Judgement(claim_id=claim.claim_id, relation=Relation.NEW,
+                          confidence=0.95, target_page_id="pg_root",
+                          rationale="nothing covers this", model="fake")
+
+    result = plan([judgement], {claim.claim_id: claim}, source, _NoStore(),
+                  default_parent="pg_root")
+
+    kinds = [op.kind for op in result.patch.operations]
+    assert OpKind.APPEND_BLOCK not in kinds
+    assert kinds == [OpKind.CREATE_PAGE]
+
+
+def test_an_index_page_gains_a_link_rather_than_a_paragraph():
+    """Reading lists and hubs are navigation. Appending prose to one is how an index
+    turns into an essay nobody reads."""
+    from palimpsest.plan import plan
+    from palimpsest.types import (
+        Claim,
+        ClaimType,
+        Judgement,
+        OpKind,
+        Relation,
+        Source,
+        new_id,
+    )
+
+    class _IndexStore(_NoStore):
+        def get_page(self, page_id):
+            return {"page_id": page_id, "title": "Reading list", "role": "index"}
+
+    source = Source(source_id=new_id("src_"), kind="url", title="An article", text="x")
+    claim = Claim(claim_id=new_id("clm_"), text="A fact.", type=ClaimType.FACT,
+                  topics=())
+    judgement = Judgement(claim_id=claim.claim_id, relation=Relation.NEW,
+                          confidence=0.95, target_page_id="pg_reading",
+                          rationale="r", model="fake")
+
+    result = plan([judgement], {claim.claim_id: claim}, source, _IndexStore(),
+                  default_parent="pg_root")
+
+    assert [op.kind for op in result.patch.operations] == [OpKind.LINK_PAGES]

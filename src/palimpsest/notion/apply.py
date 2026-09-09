@@ -521,7 +521,10 @@ def _refresh_mirror(client: NotionClient, store, patch: Patch) -> None:
     """
     touched: set[str] = set()
     for op in patch.operations:
-        if op.applied_at is None:
+        # Every operation that ran, whether it is still in force or has just been undone.
+        # `revert_patch` clears `applied_at`, so filtering on it here would make the
+        # refresh a no-op on exactly the path that needs it most.
+        if op.applied_at is None and not (op.result or op.inverse):
             continue
         page_id = (op.result or {}).get("page_id") or _page_of(store, op.target)
         if page_id:
@@ -570,4 +573,10 @@ def revert_patch(client: NotionClient, store, patch: Patch,
     patch.status = result.status
     store.put_patch(patch)
     store.set_patch_status(patch.patch_id, result.status, reviewer=reviewer)
+    # An undo changes the workspace exactly as much as the thing it undid, so the mirror
+    # needs the same refresh. Without it the blocks an undo removed stay in the mirror as
+    # live candidates: retrieval offers them, the classifier corroborates one, and the
+    # apply fails with "Can't edit block that is archived" — a message about a block the
+    # user deleted minutes ago and has no reason to connect to what they are doing now.
+    _refresh_mirror(client, store, patch)
     return result

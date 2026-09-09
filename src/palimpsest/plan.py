@@ -46,9 +46,12 @@ log = logging.getLogger("palimpsest.plan")
 #: The single key every page creation in a patch folds onto — see `_merged`.
 _ONE_PAGE = "the-one-new-page"
 
-#: Roles whose pages should gain a *link* rather than prose. Appending a paragraph to a
-#: hub page is how index pages turn into essays nobody reads.
-LINK_ONLY_ROLES = frozenset({"hub"})
+#: Roles whose pages should gain a *link* rather than prose.
+#:
+#: Appending a paragraph to a hub is how index pages slowly turn into essays nobody
+#: reads. `index` and `scratchpad` joined `hub` after a real capture put three loose
+#: bullets on a reading list: the rule was right and the set was too small.
+LINK_ONLY_ROLES = frozenset({"hub", "index", "scratchpad"})
 
 
 @dataclass
@@ -401,6 +404,14 @@ def _operations_for(judgement: Judgement, claim: Claim, source: Source, store, *
     # -- NEW / EXTENDS: append, or create a page if nothing fits -------------
     if relation in (Relation.NEW, Relation.EXTENDS):
         page_id = judgement.target_page_id
+        # The root is a container, not a topic. Retrieval offers it as a candidate like
+        # any other page — it has a title and, once the journal databases are on it,
+        # blocks — so the classifier reasonably names it and every orphan claim ends up
+        # as a loose bullet on the page that holds everything else. Three captures in,
+        # the top of the workspace is a bin. Falling through to the create-page path
+        # instead means those claims join the page the composer is already writing.
+        if page_id and page_id == default_parent:
+            page_id = None
         if page_id:
             role = _page_role(store, page_id)
             if role in LINK_ONLY_ROLES:

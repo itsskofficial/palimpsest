@@ -333,3 +333,60 @@ def test_strip_readonly_drops_nested_nulls_too():
     assert "link" not in rebuilt["callout"]["rich_text"][0]["text"]
     assert "href" not in rebuilt["callout"]["rich_text"][0]
     assert rebuilt["callout"]["icon"]["emoji"] == "💡"
+
+
+# ---------------------------------------------------------------------------
+# the mirror after an undo
+# ---------------------------------------------------------------------------
+
+
+def test_undoing_refreshes_the_mirror_like_applying_does(wired, store, monkeypatch):
+    """An undo changes the workspace as much as the thing it undid.
+
+    `apply_patch` pulls the touched pages back into the mirror; `revert_patch` did not.
+    So the blocks an undo removed stayed in the mirror as live retrieval candidates —
+    the classifier would corroborate one, and the apply would fail with "Can't edit
+    block that is archived", about a block the user deleted minutes ago and has no
+    reason to connect to what they are doing now. Found live, twice, before it was
+    traced to the missing half of a pair.
+    """
+    from palimpsest.notion import apply as apply_mod
+
+    refreshed: list[str] = []
+    monkeypatch.setattr(apply_mod, "_refresh_mirror",
+                        lambda client, st, patch: refreshed.append(patch.patch_id))
+
+    patch = _rewrite(NEW_BODY, ["bk_0", "bk_1"])
+    apply_patch(wired, store, patch, reviewer="test")
+    assert refreshed == [patch.patch_id]
+
+    revert_patch(wired, store, patch, reviewer="test")
+    assert refreshed == [patch.patch_id, patch.patch_id]
+
+
+def test_the_refresh_still_finds_the_page_after_applied_at_is_cleared(wired, store):
+    """`revert_patch` clears `applied_at`, so a refresh that filtered on it would be a
+    no-op on precisely the path that needs it."""
+    from palimpsest.notion.apply import _refresh_mirror
+
+    patch = _rewrite(NEW_BODY, ["bk_0"])
+    apply_patch(wired, store, patch, reviewer="test")
+    revert_patch(wired, store, patch, reviewer="test")
+    assert patch.operations[0].applied_at is None
+
+    seen: list[list[str]] = []
+
+    class Recording:
+        def get_page(self, pid):
+            return None
+
+    import palimpsest.notion.mirror as mirror_mod
+
+    original = mirror_mod.refresh_pages
+    mirror_mod.refresh_pages = lambda client, st, ids, **kw: seen.append(list(ids))
+    try:
+        _refresh_mirror(wired, store, patch)
+    finally:
+        mirror_mod.refresh_pages = original
+
+    assert seen and PAGE in seen[0]
