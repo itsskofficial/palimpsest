@@ -653,3 +653,29 @@ def test_an_index_page_gains_a_link_rather_than_a_paragraph():
                   default_parent="pg_root")
 
     assert [op.kind for op in result.patch.operations] == [OpKind.LINK_PAGES]
+
+
+def test_archiving_a_page_archives_its_blocks(store):
+    """An orphan block is not merely untidy.
+
+    It stays a retrieval candidate, so the classifier corroborates a sentence on a page
+    nobody can open, and the apply fails with "Can't edit block that is archived" — an
+    error about a page the user deleted, surfacing during something unrelated. One real
+    workspace had 143 of them before the cascade existed.
+    """
+    store.put_pages([
+        {"page_id": "pg_keep", "title": "Kept", "last_edited": "1"},
+        {"page_id": "pg_gone", "title": "Deleted in Notion", "last_edited": "1"},
+    ])
+    store.put_blocks([
+        {"block_id": "bk_keep", "page_id": "pg_keep", "type": "paragraph",
+         "position": 0, "text": "still here"},
+        {"block_id": "bk_gone", "page_id": "pg_gone", "type": "paragraph",
+         "position": 0, "text": "on a page that no longer exists"},
+    ])
+
+    dropped = store.drop_missing({"pg_keep"})
+
+    assert dropped == 1
+    live = {b["block_id"] for b in store.get_blocks()}
+    assert live == {"bk_keep"}

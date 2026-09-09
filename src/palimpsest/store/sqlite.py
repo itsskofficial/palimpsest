@@ -231,6 +231,13 @@ class SQLiteStore:
         if gone:
             self.conn.executemany("UPDATE pages SET archived=1 WHERE page_id=?",
                                   [(p,) for p in gone])
+            # And their blocks. A page that is gone cannot have live blocks, and an
+            # orphan block is not merely untidy: it stays a retrieval candidate, so the
+            # classifier corroborates a sentence on a page nobody can open and the apply
+            # fails with "Can't edit block that is archived". One workspace here had 143
+            # of them before this cascade existed.
+            self.conn.executemany("UPDATE blocks SET archived=1 WHERE page_id=?",
+                                  [(p,) for p in gone])
             self.conn.commit()
         return len(gone)
 

@@ -294,6 +294,10 @@ class PostgresStore:
             if gone:
                 cur.executemany("UPDATE pages SET archived=true WHERE page_id=%s",
                                 [(p,) for p in gone])
+                # See the SQLite implementation: an orphan block stays a retrieval
+                # candidate and breaks a later apply.
+                cur.executemany("UPDATE blocks SET archived=true WHERE page_id=%s",
+                                [(p,) for p in gone])
         return len(gone)
 
     # -- the pipeline ----------------------------------------------------------
