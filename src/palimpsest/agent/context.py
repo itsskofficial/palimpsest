@@ -49,8 +49,7 @@ class ToolContext:
         from palimpsest.llm import Model
 
         if self._model is None:
-            self._model = Model(self.settings.model,
-                                api_key=self.settings.anthropic_api_key,
+            self._model = Model(settings=self.settings,
                                 max_tokens=self.settings.max_tokens)
         return self._model
 

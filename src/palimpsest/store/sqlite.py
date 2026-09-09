@@ -493,6 +493,45 @@ class SQLiteStore:
         self.conn.execute("DELETE FROM agent_memory WHERE kind=? AND key=?", (kind, key))
         self.conn.commit()
 
+    # -- cached embeddings -----------------------------------------------------
+
+    def get_embeddings(self, block_ids: list[str], model: str) -> dict[str, tuple[str, bytes]]:
+        """Cached vectors for these blocks, as {block_id: (text_hash, packed)}.
+
+        The hash comes back with the vector so the caller can discard entries whose block
+        has since been edited. Deciding that here would mean passing the current text of
+        every block into the store, which is the wrong direction for the data to flow.
+        """
+        if not block_ids:
+            return {}
+        out: dict[str, tuple[str, bytes]] = {}
+        # Chunked: SQLite's default parameter limit is 999, and a full workspace is more
+        # blocks than that.
+        for start in range(0, len(block_ids), 400):
+            chunk = block_ids[start:start + 400]
+            marks = ",".join("?" * len(chunk))
+            rows = self.conn.execute(
+                f"SELECT block_id, text_hash, vector FROM embeddings "
+                f"WHERE model=? AND block_id IN ({marks})", (model, *chunk))
+            for row in rows:
+                out[row["block_id"]] = (row["text_hash"], bytes(row["vector"]))
+        return out
+
+    def put_embeddings(self, rows: list[dict], model: str) -> int:
+        """Store vectors. Each row is {block_id, text_hash, dim, vector}."""
+        if not rows:
+            return 0
+        now = time.time()
+        self.conn.executemany(
+            "INSERT INTO embeddings (block_id, model, text_hash, dim, vector, created_at) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(block_id, model) DO UPDATE SET "
+            "text_hash=excluded.text_hash, dim=excluded.dim, vector=excluded.vector, "
+            "created_at=excluded.created_at",
+            [(r["block_id"], model, r["text_hash"], r["dim"], r["vector"], now)
+             for r in rows])
+        self.conn.commit()
+        return len(rows)
+
     # -- the agent: the approval gate ------------------------------------------
 
     def put_approval(self, approval: dict) -> str:

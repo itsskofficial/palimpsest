@@ -3,8 +3,12 @@
 A manual loop rather than the SDK's Tool Runner, and the choice is deliberate. Three
 things this loop has to do do not fit a hands-off runner: it wraps every tool call in a
 Langfuse span; it lets a tool *pause the whole turn* when an edit is held for approval;
-and it mixes the server-side `web_search` tool with local custom tools. Owning the
+and it mixes a provider's server-side `web_search` with local custom tools. Owning the
 `while` gives all three cleanly, and the loop it replaces is about thirty lines.
+
+Nothing here knows which vendor is serving the model. The turn is a `Reply`, the history
+is a provider-owned `Conversation`, and web search is *offered*; a provider that does not
+run one simply reports that it cannot and the model uses the local tools instead.
 
 The shape is the standard tool loop, with the safety properties living in the tools and
 the gate, not here:
@@ -19,7 +23,6 @@ bounded by a turn cap and, later, by compaction.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,6 +31,7 @@ from palimpsest import trace
 from palimpsest.agent.context import ToolContext, current_chat
 from palimpsest.agent.prompts import build_system
 from palimpsest.agent.registry import Tool, build_registry
+from palimpsest.llm import ToolResult
 
 log = logging.getLogger("palimpsest.agent.loop")
 
@@ -36,10 +40,6 @@ __all__ = ["AgentReply", "run_turn"]
 #: A hard stop on tool round-trips in one turn. A well-behaved turn is two or three; ten
 #: means the model is stuck, and looping forever is how an agent burns a credit balance.
 MAX_STEPS = 10
-
-#: The server-side web search tool. Runs on Anthropic's infrastructure — the model uses
-#: it and results return in the same response, so there is nothing to execute locally.
-WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 4}
 
 #: How many prior messages to replay for continuity. Enough for "apply that one" to
 #: resolve; short enough to stay cheap. Compaction can extend this later.
@@ -56,12 +56,6 @@ class AgentReply:
     steps: int = 0
     trace_id: str | None = None
     error: str | None = None
-
-
-def _tool_result_block(tool_use_id: str, payload: Any, is_error: bool = False) -> dict:
-    return {"type": "tool_result", "tool_use_id": tool_use_id,
-            "content": json.dumps(payload, ensure_ascii=False, default=str)[:60000],
-            "is_error": is_error}
 
 
 def _run_tool(tools: dict[str, Tool], name: str, args: dict) -> tuple[Any, bool]:
@@ -86,17 +80,18 @@ def run_turn(ctx: ToolContext, user_text: str, *, session_id: str,
     registry = build_registry(ctx)
     tools_by_name = {t.name: t for t in registry}
     tool_specs = [t.spec() for t in registry]
-    if ctx.settings.has_model:
-        tool_specs.append(WEB_SEARCH)
 
     memories = ctx.store.get_memories(kind="preference", limit=30)
     system = build_system(ctx.settings, memories)
 
-    # Replay prior turns for continuity, then add the new user message.
+    # Replay prior turns for continuity, then add the new user message. The conversation
+    # belongs to the provider: how an assistant turn and a set of tool results are
+    # represented differs between vendors, and this loop should not know which is in use.
     history = ctx.store.get_messages(session_id, limit=HISTORY_LIMIT)
-    messages: list[dict] = [{"role": m["role"], "content": m["content"]}
-                            for m in history if m["role"] in ("user", "assistant")]
-    messages.append({"role": "user", "content": user_text})
+    conversation = ctx.model.conversation(
+        [{"role": m["role"], "content": m["content"]} for m in history
+         if m["role"] in ("user", "assistant")])
+    conversation.user(user_text)
     ctx.store.add_message(session_id, "user", user_text)
 
     # Any capture the agent starts this turn should report back to this chat.
@@ -114,8 +109,9 @@ def run_turn(ctx: ToolContext, user_text: str, *, session_id: str,
             reply.steps = step + 1
             try:
                 effort = "low" if step == 0 and _looks_trivial(user_text) else "high"
-                response = ctx.model.message(system=system, messages=messages,
-                                             tools=tool_specs, effort=effort)
+                turn_reply = ctx.model.converse(
+                    system=system, conversation=conversation, tools=tool_specs,
+                    effort=effort, web_search=True)
             except Exception as e:
                 log.exception("model call failed")
                 reply.error = f"{type(e).__name__}: {e}"
@@ -124,42 +120,33 @@ def run_turn(ctx: ToolContext, user_text: str, *, session_id: str,
                 turn.update(level="ERROR", status_message=reply.error)
                 break
 
-            stop = getattr(response, "stop_reason", None)
-
-            if stop == "refusal":
-                reply.text = ("I can't help with that one. Nothing was changed.")
+            if turn_reply.stop == "refusal":
+                reply.text = "I can't help with that one. Nothing was changed."
                 break
 
-            # Append the assistant turn verbatim — thinking and tool_use blocks included,
-            # or the next request loses the model's own reasoning and pending calls.
-            assistant_content = response.content
-            messages.append({"role": "assistant", "content": assistant_content})
+            # Give the model's own turn back before the next request, or it loses its
+            # reasoning and the ids of the calls it is waiting on.
+            conversation.assistant(turn_reply)
 
-            tool_uses = [b for b in assistant_content
-                         if getattr(b, "type", None) == "tool_use"]
-
-            if not tool_uses:
-                reply.text = "".join(getattr(b, "text", "") for b in assistant_content
-                                     if getattr(b, "type", None) == "text").strip()
-                # `pause_turn` (a server tool mid-flight) means continue, not stop.
-                if stop == "pause_turn":
+            if not turn_reply.tool_calls:
+                reply.text = turn_reply.text.strip()
+                # A server-side tool ran mid-flight and there is more to come.
+                if turn_reply.stop == "pause":
                     continue
                 break
 
             # Execute every requested custom tool; server tools already ran remotely.
-            results: list[dict] = []
-            for block in tool_uses:
-                name = block.name
-                args = block.input if isinstance(block.input, dict) else {}
-                reply.tool_calls.append(name)
+            results: list[ToolResult] = []
+            for call in turn_reply.tool_calls:
+                reply.tool_calls.append(call.name)
                 if on_step:
-                    on_step(_step_note(name, args))
-                result, is_error = _run_tool(tools_by_name, name, args)
+                    on_step(_step_note(call.name, call.arguments))
+                result, is_error = _run_tool(tools_by_name, call.name, call.arguments)
                 if isinstance(result, dict) and result.get("approval_id"):
                     reply.approvals.append(result["approval_id"])
-                results.append(_tool_result_block(block.id, result, is_error))
+                results.append(ToolResult(id=call.id, payload=result, is_error=is_error))
 
-            messages.append({"role": "user", "content": results})
+            conversation.results(results)
         else:
             # Loop fell through MAX_STEPS without an end_turn.
             reply.text = reply.text or ("I've done several steps but couldn't wrap this "

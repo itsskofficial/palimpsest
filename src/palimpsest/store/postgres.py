@@ -532,6 +532,36 @@ class PostgresStore:
         with self._cur(dict_rows=False) as cur:
             cur.execute("DELETE FROM agent_memory WHERE kind=%s AND key=%s", (kind, key))
 
+    # -- cached embeddings -----------------------------------------------------
+
+    def get_embeddings(self, block_ids: list[str],
+                       model: str) -> dict[str, tuple[str, bytes]]:
+        """Cached vectors for these blocks, as {block_id: (text_hash, packed)}."""
+        if not block_ids:
+            return {}
+        with self._cur() as cur:
+            cur.execute(
+                "SELECT block_id, text_hash, vector FROM embeddings "
+                "WHERE model=%s AND block_id = ANY(%s)", (model, list(block_ids)))
+            return {r["block_id"]: (r["text_hash"], bytes(r["vector"]))
+                    for r in cur.fetchall()}
+
+    def put_embeddings(self, rows: list[dict], model: str) -> int:
+        """Store vectors. Each row is {block_id, text_hash, dim, vector}."""
+        if not rows:
+            return 0
+        now = time.time()
+        with self._cur(dict_rows=False) as cur:
+            cur.executemany(
+                "INSERT INTO embeddings (block_id, model, text_hash, dim, vector, "
+                "created_at) VALUES (%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(block_id, model) DO UPDATE SET "
+                "text_hash=excluded.text_hash, dim=excluded.dim, "
+                "vector=excluded.vector, created_at=excluded.created_at",
+                [(r["block_id"], model, r["text_hash"], r["dim"], r["vector"], now)
+                 for r in rows])
+        return len(rows)
+
     # -- the agent: the approval gate ------------------------------------------
 
     def put_approval(self, approval: dict) -> str:

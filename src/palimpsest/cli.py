@@ -42,8 +42,7 @@ def _model(settings, required: bool = True):
     from palimpsest.llm import Model, ModelError
 
     try:
-        return Model(settings.model, api_key=settings.anthropic_api_key,
-                     max_tokens=settings.max_tokens)
+        return Model(settings=settings, max_tokens=settings.max_tokens)
     except (ModelError, ImportError) as e:
         if required:
             raise SystemExit(str(e)) from e

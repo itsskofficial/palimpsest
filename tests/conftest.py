@@ -23,8 +23,20 @@ def _hermetic_config(monkeypatch):
     silently inherit a real Notion token and a real bot token, and a test asserting
     "nothing is configured" would instead make a live API call. Tests control their
     environment through `monkeypatch`; the config file is switched off for all of them.
+
+    The provider keys are cleared for the same reason, one step further along. The model
+    layer resolves a provider from whichever key it can find, so a developer with a Groq
+    key exported in their shell would see "a model is configured" in a test that set no
+    model at all — and the suite would then pass for them and fail in CI, which is the
+    worst way to learn about it.
     """
     monkeypatch.setattr("palimpsest.config.load_env_file", lambda *a, **k: 0)
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
+                 "OPENROUTER_API_KEY", "TOGETHER_API_KEY", "DEEPSEEK_API_KEY",
+                 "MISTRAL_API_KEY", "XAI_API_KEY", "PALIMPSEST_MODEL",
+                 "PALIMPSEST_MODEL_PROVIDER", "PALIMPSEST_MODEL_BASE_URL",
+                 "PALIMPSEST_MODEL_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
 ATTENTION = ("Scaled dot-product attention divides the logits by the square root of the "
              "key dimension, which keeps the gradient variance stable as the dimension "

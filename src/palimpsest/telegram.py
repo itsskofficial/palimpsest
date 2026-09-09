@@ -405,7 +405,7 @@ class Bot:
                 roots = self.settings.notion_root_pages
                 result = organise(
                     store,
-                    Model(self.settings.model, api_key=self.settings.anthropic_api_key,
+                    Model(settings=self.settings,
                           max_tokens=self.settings.max_tokens),
                     root_page_id=roots[0] if roots else None,
                     min_confidence=self.settings.min_confidence)
@@ -693,8 +693,7 @@ def run(settings=None, queue=None) -> None:
             store_factory=new_store,
             handlers={"ingest": ingest_runner(
                 settings,
-                model_factory=lambda: Model(settings.model,
-                                            api_key=settings.anthropic_api_key,
+                model_factory=lambda: Model(settings=settings,
                                             max_tokens=settings.max_tokens),
                 archive=open_artifacts(settings.artifact_url),
                 notion_factory=(lambda: NotionClient(settings.notion_token or "",

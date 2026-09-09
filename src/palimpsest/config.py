@@ -10,8 +10,14 @@ Two rules the validation enforces, because each is a way this becomes unsafe:
    hole, and the app refuses rather than discovering it later.
 
 Autonomy is a *ladder*, not a switch: `PALIMPSEST_AUTONOMY` names the highest risk
-tier that may apply without review (`none` → `low` → `medium`). There is no `high`
-value — contradictions are never automatic, at any setting.
+tier that may apply without review (`none` → `low` → `medium` → `full`). `full` means
+everything the classifier is allowed to decide on its own, and it still stops short of
+contradictions — those are never automatic, at any setting.
+
+The model is configuration too. `PALIMPSEST_MODEL_BASE_URL` points at anything that
+speaks the OpenAI API; otherwise the provider is inferred from whichever key is present.
+`model_env` is how those values reach `palimpsest.llm` without it reading `os.environ`
+behind an explicit `Settings`'s back.
 """
 
 from __future__ import annotations
@@ -22,7 +28,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-__all__ = ["Settings", "config_path", "load", "load_env_file", "redact"]
+__all__ = ["MODEL_PROVIDERS", "ModelSetup", "Settings", "config_path", "describe_setup",
+           "load", "load_env_file", "model_getter", "redact"]
 
 
 def config_path() -> Path:
@@ -83,8 +90,109 @@ def load_env_file(path: Path | None = None) -> int:
 
 _SECRET_HINTS = ("key", "secret", "password", "token", "dsn", "url", "credential")
 
-#: Highest-risk relation tier that may be applied without a human, per level.
-AUTONOMY_LEVELS = {"none": set(), "low": {"low"}, "medium": {"low", "medium"}}
+#: The risk tiers a relation can carry. `high` is contradictions, and only
+#: contradictions — see `types.Relation.risk`.
+RISK_TIERS = frozenset({"low", "medium", "high"})
+
+#: The tier that no autonomy level may ever admit.
+#:
+#: A knowledge base that silently replaces a true claim with a false one is strictly
+#: worse than no automation at all, because you stop knowing which parts to trust. This
+#: is the one property the whole design rests on, so it is a named constant that the
+#: levels below are *derived from* rather than a rule each level remembers to follow.
+NEVER_AUTOMATIC = frozenset({"high"})
+
+#: Which risk tiers may be applied without a human, per level.
+#:
+#: `full` is defined by subtraction, not by listing: it means "everything that is
+#: allowed to be automatic", so if a tier were ever added it would be included here and
+#: excluded from `NEVER_AUTOMATIC` deliberately rather than by forgetting.
+AUTONOMY_LEVELS: dict[str, frozenset[str]] = {
+    "none": frozenset(),
+    "low": frozenset({"low"}),
+    "medium": frozenset({"low", "medium"}),
+    "full": RISK_TIERS - NEVER_AUTOMATIC,
+}
+
+
+#: Hosts that serve the OpenAI API, and a sensible model for each. Order is the order
+#: they are tried when nothing is set explicitly.
+#:
+#: This table lives in `config` rather than in `palimpsest.llm` for a structural reason:
+#: the store layer reads settings, and if `config` imported the model layer then `store`
+#: would transitively depend on it, which the layering contract forbids and which would
+#: mean the offline core could not be loaded without the model code. Resolution *policy*
+#: is configuration; the *clients* are the model layer's business.
+MODEL_PROVIDERS: dict[str, tuple[str, str, str]] = {
+    "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1", "gpt-5.1"),
+    "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1", "openai/gpt-oss-120b"),
+    "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1",
+                   "anthropic/claude-sonnet-5"),
+    "together": ("TOGETHER_API_KEY", "https://api.together.xyz/v1",
+                 "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+    "deepseek": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1", "deepseek-chat"),
+    "mistral": ("MISTRAL_API_KEY", "https://api.mistral.ai/v1", "mistral-large-latest"),
+    "xai": ("XAI_API_KEY", "https://api.x.ai/v1", "grok-4"),
+}
+
+
+@dataclass(frozen=True)
+class ModelSetup:
+    """Which provider a configuration resolves to, and why. Never makes a call."""
+
+    provider: str
+    model: str
+    base_url: str | None
+    reason: str
+
+
+def model_getter(settings: Any):
+    """Where model configuration is read from: a `Settings` if given, else the process.
+
+    A `Settings` is *authoritative*, not merely preferred. It is built from the
+    environment in the first place, so an explicitly constructed one — in a test, in an
+    eval scoring two models against the same golden set, in a worker pinned to a cheaper
+    provider — means "these values, and no others". Falling back to `os.environ` for a
+    field it deliberately left empty is how a process ends up using a key nobody asked it
+    to use, and how a suite ends up passing only on the machine whose shell exports the
+    right variable.
+    """
+    if settings is None:
+        return lambda key: os.environ.get(key) or ""
+    overrides = getattr(settings, "model_env", None) or {}
+    return lambda key: str(overrides.get(key) or "")
+
+
+def describe_setup(settings: Any = None) -> ModelSetup | None:
+    """What provider this configuration names, or `None` if it names none.
+
+    `None` is a supported state, not an error: the mirror, retrieval, the duplicate sweep
+    and undo all work with no model at all.
+    """
+    get = model_getter(settings)
+
+    explicit = get("PALIMPSEST_MODEL_BASE_URL")
+    if explicit:
+        return ModelSetup("openai-compatible", get("PALIMPSEST_MODEL") or "", explicit,
+                          "PALIMPSEST_MODEL_BASE_URL is set")
+
+    named = (get("PALIMPSEST_MODEL_PROVIDER") or "").strip().lower()
+    if named == "anthropic":
+        return ModelSetup("anthropic", get("PALIMPSEST_MODEL") or "claude-opus-5", None,
+                          "PALIMPSEST_MODEL_PROVIDER=anthropic")
+    if named in MODEL_PROVIDERS:
+        _, url, default = MODEL_PROVIDERS[named]
+        return ModelSetup(named, get("PALIMPSEST_MODEL") or default, url,
+                          f"PALIMPSEST_MODEL_PROVIDER={named}")
+
+    if get("ANTHROPIC_API_KEY"):
+        return ModelSetup("anthropic", get("PALIMPSEST_MODEL") or "claude-opus-5", None,
+                          "ANTHROPIC_API_KEY is set")
+    for name, (env, url, default) in MODEL_PROVIDERS.items():
+        if get(env):
+            return ModelSetup(name, get("PALIMPSEST_MODEL") or default, url,
+                              f"{env} is set")
+    return None
 
 
 def redact(value: Any, key: str = "") -> Any:
@@ -166,8 +274,18 @@ class Settings:
     notion_root_pages: tuple[str, ...] = ()
 
     # -- the model -------------------------------------------------------------
+    #: Empty means "whatever the provider's default is", which is how someone with only
+    #: a Groq key avoids being handed a Claude model id they cannot call.
+    model: str = ""
+    #: Force a provider. Empty means resolve from whichever key is present.
+    model_provider: str | None = None
+    #: Any OpenAI-compatible endpoint, including a local one. Setting this wins over
+    #: every key-sniffing rule, because it is the only unambiguous statement of intent.
+    model_base_url: str | None = None
+    #: A key for that endpoint, when it is not one of the hosts we know by name.
+    model_api_key: str | None = None
     anthropic_api_key: str | None = None
-    model: str = "claude-opus-5"
+    openrouter_api_key: str | None = None
     extract_effort: str = "medium"
     classify_effort: str = "high"
     max_tokens: int = 16_000
@@ -175,7 +293,11 @@ class Settings:
     # -- ingestion -------------------------------------------------------------
     firecrawl_api_key: str | None = None
     openai_api_key: str | None = None
+    #: Vectors are optional. Left unset, retrieval is BM25 — good, keyless, and the
+    #: floor the product is designed around rather than a degraded mode.
     embed_model: str = "text-embedding-3-small"
+    embed_base_url: str | None = None
+    embed_api_key: str | None = None
     #: Speech to text. Whichever key is set is used, in this order, unless
     #: `PALIMPSEST_TRANSCRIBE` names one. There is no offline fallback on purpose: a
     #: transcript you did not get is not a source.
@@ -240,14 +362,20 @@ class Settings:
             notion_token=os.environ.get("NOTION_TOKEN") or None,
             notion_version=os.environ.get("NOTION_VERSION", "2026-03-11"),
             notion_root_pages=tuple(r.strip() for r in roots.split(",") if r.strip()),
+            model=os.environ.get("PALIMPSEST_MODEL", ""),
+            model_provider=os.environ.get("PALIMPSEST_MODEL_PROVIDER") or None,
+            model_base_url=os.environ.get("PALIMPSEST_MODEL_BASE_URL") or None,
+            model_api_key=os.environ.get("PALIMPSEST_MODEL_API_KEY") or None,
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
-            model=os.environ.get("PALIMPSEST_MODEL", "claude-opus-5"),
+            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY") or None,
             extract_effort=os.environ.get("PALIMPSEST_EXTRACT_EFFORT", "medium"),
             classify_effort=os.environ.get("PALIMPSEST_CLASSIFY_EFFORT", "high"),
             max_tokens=_int("PALIMPSEST_MAX_TOKENS", 16_000),
             firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY") or None,
             openai_api_key=os.environ.get("OPENAI_API_KEY") or None,
             embed_model=os.environ.get("PALIMPSEST_EMBED_MODEL", "text-embedding-3-small"),
+            embed_base_url=os.environ.get("PALIMPSEST_EMBED_BASE_URL") or None,
+            embed_api_key=os.environ.get("PALIMPSEST_EMBED_API_KEY") or None,
             deepgram_api_key=os.environ.get("DEEPGRAM_API_KEY") or None,
             groq_api_key=os.environ.get("GROQ_API_KEY") or None,
             sarvam_api_key=os.environ.get("SARVAM_API_KEY") or None,
@@ -301,8 +429,41 @@ class Settings:
         return urlparse(self.database_url).port == 6543
 
     @property
+    def model_env(self) -> dict[str, str]:
+        """The model layer's view of this configuration, by environment-variable name.
+
+        `palimpsest.llm` resolves a provider from a handful of variables. Handing it this
+        dict rather than letting it read `os.environ` directly is what makes an explicit
+        `Settings(...)` — in a test, in an eval, in a second worker with a different
+        model — actually take effect instead of being silently overruled by the ambient
+        process environment.
+        """
+        pairs = {
+            "PALIMPSEST_MODEL": self.model,
+            "PALIMPSEST_MODEL_PROVIDER": self.model_provider,
+            "PALIMPSEST_MODEL_BASE_URL": self.model_base_url,
+            "PALIMPSEST_MODEL_API_KEY": self.model_api_key,
+            "ANTHROPIC_API_KEY": self.anthropic_api_key,
+            "OPENAI_API_KEY": self.openai_api_key,
+            "GROQ_API_KEY": self.groq_api_key,
+            "OPENROUTER_API_KEY": self.openrouter_api_key,
+        }
+        return {k: v for k, v in pairs.items() if v}
+
+    @property
+    def model_setup(self) -> ModelSetup | None:
+        """Which provider this configuration resolves to, or `None`. Never calls out."""
+        return describe_setup(self)
+
+    @property
     def has_model(self) -> bool:
-        return bool(self.anthropic_api_key)
+        """Whether this configuration names a model provider, from any vendor.
+
+        Says nothing about whether the Anthropic SDK is installed — `llm.available()`
+        answers that. Someone who set a key but skipped the extra should be told to
+        install the extra, not told they have no key.
+        """
+        return describe_setup(self) is not None
 
     @property
     def has_notion(self) -> bool:
@@ -343,7 +504,7 @@ class Settings:
             raise ValueError(
                 f"PALIMPSEST_AUTONOMY={self.autonomy!r} is not valid. Use one of: "
                 f"{', '.join(sorted(AUTONOMY_LEVELS))}.\n"
-                "There is deliberately no 'high': contradictions are never applied "
+                "'full' is as far as the ladder goes: contradictions are never applied "
                 "automatically, at any setting."
             )
         if not self.database_url.startswith(("sqlite:", "postgres://", "postgresql://")):
@@ -421,8 +582,10 @@ class Settings:
         if not self.has_notion:
             out.append("NOTION_TOKEN is not set — nothing can be mirrored or applied")
         if not self.has_model:
-            out.append("ANTHROPIC_API_KEY is not set — extraction and classification are off "
-                       "(the mirror and the sweeps still work)")
+            out.append("no model is configured — extraction and classification are off "
+                       "(the mirror and the sweeps still work). Set ANTHROPIC_API_KEY, "
+                       "OPENAI_API_KEY or GROQ_API_KEY, or PALIMPSEST_MODEL_BASE_URL "
+                       "for any other OpenAI-compatible endpoint")
         if self.uses_postgres and self.uses_pooler:
             out.append("database URL is a transaction pooler (6543): correct for the service, "
                        "but run `palimpsest db migrate --url <direct 5432 URL>` for migrations")

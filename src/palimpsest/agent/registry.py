@@ -2,8 +2,8 @@
 
 Each tool is a `Tool`: a name, a description that is genuine prompt surface, a JSON
 schema the model's arguments are validated against, and a handler that does the work
-through the shared `ToolContext`. The registry is a plain list so it can be rendered
-into the Anthropic `tools` parameter, counted, and eval'd — nothing about it is magic.
+through the shared `ToolContext`. The registry is a plain list so it can be
+handed to any provider, counted, and eval'd — nothing about it is magic.
 
 The tools divide by how much trust they need, and the division is real, not cosmetic:
 
@@ -26,6 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from palimpsest.agent.context import ToolContext
+from palimpsest.llm import ToolSpec
 
 log = logging.getLogger("palimpsest.agent.registry")
 
@@ -43,10 +44,10 @@ class Tool:
     #: evals assert that the set of writing tools is exactly the gated ones.
     writes: bool = False
 
-    def spec(self) -> dict:
-        """The shape the Anthropic API wants in `tools`."""
-        return {"name": self.name, "description": self.description,
-                "input_schema": self.input_schema}
+    def spec(self) -> ToolSpec:
+        """This tool in neutral terms, for whichever provider is serving the model."""
+        return ToolSpec(name=self.name, description=self.description,
+                        input_schema=self.input_schema)
 
 
 def _s(**properties) -> dict:

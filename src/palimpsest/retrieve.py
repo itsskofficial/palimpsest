@@ -30,6 +30,7 @@ import logging
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 __all__ = ["Candidate", "Index", "PageHit"]
@@ -45,6 +46,30 @@ STOP = frozenset(["a", "an", "and", "are", "as", "at", "be", "been", "but", "by"
 
 K1 = 1.5
 B = 0.75
+
+#: How the two signals are weighted once both are on a 0-1 scale. Lexical leads because
+#: on technical notes it is usually right and always explainable; the dense term is there
+#: to rescue the paraphrase, not to overrule an exact match.
+LEXICAL_WEIGHT = 0.65
+DENSE_WEIGHT = 0.35
+
+#: Cosine below this counts as "unrelated". Modern embedding models put almost all pairs
+#: of English text above 0.6, so scoring the raw cosine adds a near-constant to every
+#: block and changes nothing; subtracting the floor is what turns it into a signal.
+DENSE_FLOOR = 0.55
+
+#: How many BM25 hits get re-ranked by vectors on the precision path.
+DENSE_RERANK = 60
+
+#: Page-level boosts, as a fraction of the best page's own block score rather than as
+#: absolute numbers. A page whose *title* matches the claim is strong evidence — often
+#: stronger than a body match — but "strong" only means anything relative to the rest of
+#: the ranking, and BM25 magnitudes vary by an order of magnitude with corpus size.
+TITLE_BOOST = 0.5
+TOPIC_BOOST = 0.35
+
+#: What a page inherits from a neighbour it is linked to or from.
+BACKLINK_SHARE = 0.15
 
 
 def tokenize(text: str) -> list[str]:
@@ -193,50 +218,113 @@ class Index:
                 scores[doc] += idf * norm * qcount * weight
         return scores
 
-    def _dense(self, query: str, docs: list[int]) -> dict[int, float]:  # pragma: no cover
-        """Cosine similarity over embeddings, for the candidates BM25 surfaced."""
+    def _dense(self, query: str, docs: list[int]) -> dict[int, float]:
+        """Cosine similarity over embeddings, for the blocks named in `docs`.
+
+        Never raises. An embedding provider that is down, out of quota or misconfigured
+        must degrade to lexical-only retrieval rather than fail an ingest: BM25 alone is
+        the product's floor, not an error state.
+        """
         if not self.embedder or not docs:
             return {}
         try:
             qvec = self.embedder.embed([query])[0]
             missing = [d for d in docs if self._blocks[d]["block_id"] not in self._vectors]
             if missing:
-                vectors = self.embedder.embed([self._blocks[d]["text"] for d in missing])
+                # An embedder that persists its vectors needs to know which block each
+                # text belongs to. Duck-typed rather than imported: this module stays
+                # free of every dependency, which is what lets the sweeps run with no
+                # key and no network at all.
+                embedder = self.embedder
+                if hasattr(embedder, "for_blocks"):
+                    embedder = embedder.for_blocks(
+                        [self._blocks[d]["block_id"] for d in missing])
+                vectors = embedder.embed([self._blocks[d]["text"] for d in missing])
                 for d, vec in zip(missing, vectors, strict=False):
-                    self._vectors[self._blocks[d]["block_id"]] = vec
+                    if vec:
+                        self._vectors[self._blocks[d]["block_id"]] = vec
+            qnorm = math.sqrt(sum(a * a for a in qvec)) or 1.0
             out: dict[int, float] = {}
             for d in docs:
                 vec = self._vectors.get(self._blocks[d]["block_id"])
                 if not vec:
                     continue
                 dot = sum(a * b for a, b in zip(qvec, vec, strict=False))
-                na = math.sqrt(sum(a * a for a in qvec)) or 1.0
                 nb = math.sqrt(sum(b * b for b in vec)) or 1.0
-                out[d] = dot / (na * nb)
+                out[d] = dot / (qnorm * nb)
             return out
         except Exception as e:
             log.warning("dense retrieval unavailable (%s); lexical only", e)
             return {}
 
+    def _lexical(self, queries: Sequence[str]) -> dict[int, float]:
+        """BM25 over several phrasings of the same question, keeping the best score.
+
+        The best rather than the sum: variants are *rewordings*, not extra evidence, so a
+        claim that matches strongly under one phrasing should score as if that had been
+        the query. Summing would instead reward whichever claim happened to be given the
+        most variants, which is a property of the expander, not of the notes.
+        """
+        best: dict[int, float] = {}
+        for query in queries:
+            for doc, score in self._bm25(query).items():
+                if score > best.get(doc, 0.0):
+                    best[doc] = score
+        return best
+
+    def _blended(self, queries: Sequence[str], *, deep: bool) -> dict[int, float]:
+        """Lexical and dense scores over one normalised scale.
+
+        With no embedder this is BM25 and nothing else, which is the honest default: the
+        product must work for someone with no embedding provider at all.
+
+        With one, `deep` decides *how much* work the vectors do. Re-ranking what BM25
+        already surfaced (`deep=False`) is cheap and sharpens precision. Scoring every
+        block (`deep=True`) is what actually finds the page whose wording shares nothing
+        with the claim — the case lexical search cannot reach by construction, and the
+        reason "did I already write this?" fails on a paraphrase. It costs one cosine per
+        block, which for a personal knowledge base is milliseconds once the vectors are
+        cached.
+        """
+        lexical = self._lexical(queries)
+        if not self.embedder or not self._blocks:
+            return lexical
+
+        if deep:
+            docs = list(range(len(self._blocks)))
+        else:
+            docs = sorted(lexical, key=lambda d: lexical[d], reverse=True)[:DENSE_RERANK]
+        dense = self._dense(queries[0], docs)
+        if not dense:
+            return lexical
+
+        lex_max = max(lexical.values(), default=0.0) or 1.0
+        blended: dict[int, float] = {
+            doc: LEXICAL_WEIGHT * (score / lex_max) for doc, score in lexical.items()
+        }
+        for doc, score in dense.items():
+            # Cosine over a modern embedding model sits around 0.7 even for unrelated
+            # text, so the floor is subtracted before weighting: without it every block
+            # in the workspace gets the same large constant and the ranking is unchanged
+            # while looking like it was improved.
+            lift = max(0.0, score - DENSE_FLOOR) / (1.0 - DENSE_FLOOR)
+            blended[doc] = blended.get(doc, 0.0) + DENSE_WEIGHT * lift
+        return blended
+
     # -- the two queries -------------------------------------------------------
 
     def blocks_for(self, claim_text: str, *, top: int = 12,
-                   exclude_pages: tuple[str, ...] = ()) -> list[Candidate]:
-        """"Does this already exist?" — high-precision, block level."""
-        scores = self._bm25(claim_text)
+                   exclude_pages: tuple[str, ...] = (),
+                   also: Sequence[str] = ()) -> list[Candidate]:
+        """"Does this already exist?" — high-precision, block level.
+
+        `also` carries alternative phrasings of the same claim. Precision work, so the
+        vectors only re-rank what the lexical pass already found.
+        """
+        scores = self._blended([claim_text, *also], deep=False)
         if not scores:
             return []
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[: top * 3]
-
-        if self.embedder:  # pragma: no cover - needs a key
-            dense = self._dense(claim_text, [d for d, _ in ranked])
-            if dense:
-                lex_max = max(scores.values()) or 1.0
-                ranked = sorted(
-                    ((d, 0.65 * (s / lex_max) + 0.35 * dense.get(d, 0.0))
-                     for d, s in ranked),
-                    key=lambda kv: kv[1], reverse=True,
-                )
 
         out: list[Candidate] = []
         for doc, score in ranked:
@@ -254,20 +342,33 @@ class Index:
         return out
 
     def pages_for(self, claim_text: str, topics: tuple[str, ...] = (), *,
-                  top: int = 6, expand: bool = True) -> list[PageHit]:
+                  top: int = 6, expand: bool = True,
+                  also: Sequence[str] = ()) -> list[PageHit]:
         """"Where does this belong?" — recall-oriented, page level, graph-expanded.
 
         Page score aggregates its blocks' scores with a damped sum: a page with one
         strong match should beat a page with six weak ones, which a plain sum gets
         backwards. Titles are matched separately, because a page called "Concept
         injection" is about concept injection even if no block repeats the phrase.
+
+        This is the recall path, so when vectors are available they score *every* block
+        rather than re-ranking the lexical shortlist. A page whose wording shares nothing
+        with the claim cannot be re-ranked into view; it has to be found in the first
+        place, and that is the whole reason to have embeddings at all.
+
+        `also` carries alternative phrasings — see `_lexical`.
         """
         query = claim_text + (" " + " ".join(topics) if topics else "")
-        scores = self._bm25(query)
+        scores = self._blended([query, *also], deep=True)
 
         per_page: dict[str, float] = defaultdict(float)
         matched: dict[str, list[str]] = defaultdict(list)
-        for doc, score in scores.items():
+        # Sorted, because the damping below is defined in terms of a page's *best*
+        # blocks. Iterating the score map in its own order applied the /1, /2, /3 …
+        # divisors in whatever sequence the postings happened to produce, so a page's
+        # strongest match could be divided by six while a weak one was left whole — the
+        # ranking looked principled and was close to arbitrary.
+        for doc, score in sorted(scores.items(), key=lambda kv: kv[1], reverse=True):
             block = self._blocks[doc]
             pid = block["page_id"]
             # Damped: the k-th best block on a page contributes score / (k + 1).
@@ -275,15 +376,19 @@ class Index:
             per_page[pid] += score / (rank + 1.0)
             matched[pid].append(block["block_id"])
 
+        # Title and topic overlap are added on the same scale as the block scores, which
+        # `_blended` normalises to roughly 0-1 per block. A fixed +3.0 was calibrated
+        # against raw BM25 magnitudes and would swamp everything else here.
+        boost = max(per_page.values(), default=1.0) or 1.0
         qtokens = set(tokenize(query))
         for pid, page in self._pages.items():
             title_tokens = set(tokenize(page.get("title", "")))
             overlap = qtokens & title_tokens
             if overlap:
-                per_page[pid] += 3.0 * len(overlap)
-            topic_overlap = set(t.lower() for t in (page.get("topics") or [])) & set(topics)
+                per_page[pid] += TITLE_BOOST * boost * len(overlap)
+            topic_overlap = {t.lower() for t in (page.get("topics") or [])} & set(topics)
             if topic_overlap:
-                per_page[pid] += 2.0 * len(topic_overlap)
+                per_page[pid] += TOPIC_BOOST * boost * len(topic_overlap)
 
         if expand and per_page:
             # A page that links to a strong hit is plausibly relevant even when its own
@@ -292,7 +397,7 @@ class Index:
             for pid, score in seeds:
                 for neighbour in self.store.backlinks(pid):
                     if neighbour in self._pages:
-                        per_page[neighbour] += score * 0.15
+                        per_page[neighbour] += score * BACKLINK_SHARE
 
         ranked = sorted(per_page.items(), key=lambda kv: kv[1], reverse=True)[:top]
         return [

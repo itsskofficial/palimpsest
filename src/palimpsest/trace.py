@@ -167,15 +167,28 @@ def generation(name: str, *, model: str, usage: Any = None, input: Any = None,
         if output is not None:
             obs.update(output=_mask(output))
         if usage is not None:
+            # Accepts either palimpsest's own `TokenUsage` or a vendor SDK's usage
+            # object, because a provider added later may hand its own straight through.
             obs.update(usage_details={
-                "input": int(getattr(usage, "input_tokens", 0) or 0),
-                "output": int(getattr(usage, "output_tokens", 0) or 0),
-                "cache_read_input_tokens": int(getattr(usage, "cache_read_input_tokens", 0) or 0),
-                "cache_creation_input_tokens": int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+                "input": _tokens(usage, "input", "input_tokens", "prompt_tokens"),
+                "output": _tokens(usage, "output", "output_tokens", "completion_tokens"),
+                "cache_read_input_tokens": _tokens(
+                    usage, "cache_read", "cache_read_input_tokens"),
+                "cache_creation_input_tokens": _tokens(
+                    usage, "cache_write", "cache_creation_input_tokens"),
             })
         obs.end()
     except Exception as e:  # pragma: no cover - defensive
         log.debug("generation record failed: %s", e)
+
+
+def _tokens(usage: Any, *names: str) -> int:
+    """The first of these attributes that is present, as an int. Missing means zero."""
+    for name in names:
+        value = getattr(usage, name, None)
+        if value:
+            return int(value)
+    return 0
 
 
 def score(name: str, value: float, *, comment: str | None = None,

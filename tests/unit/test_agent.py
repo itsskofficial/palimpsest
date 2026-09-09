@@ -5,8 +5,10 @@ these tests pin the parts that must never regress and must run with no key: that
 gate holds writes correctly, that the writing tools are exactly the gated ones, and that
 the loop drives a scripted model through a tool call to an answer.
 
-The fake model is scripted — it returns whatever blocks the test queued — so the loop's
-control flow is what is under test, not the model's judgement.
+The fake model is scripted — it returns whatever `Reply` the test queued — so the loop's
+control flow is what is under test, not the model's judgement. Since the loop was made
+provider-invariant the fake no longer imitates any vendor's content blocks, which is the
+point: if this fake ever has to grow a vendor shape again, an abstraction has leaked.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import pytest
 from palimpsest.agent import ToolContext, build_registry
 from palimpsest.agent.loop import run_turn
 from palimpsest.config import Settings
+from palimpsest.llm import Reply, ToolCall
 from palimpsest.types import Operation, OpKind, Patch, Relation, new_id
 
 # ---------------------------------------------------------------------------
@@ -23,35 +26,55 @@ from palimpsest.types import Operation, OpKind, Patch, Relation, new_id
 # ---------------------------------------------------------------------------
 
 
-class _Block:
-    """Mimics an Anthropic content block closely enough for the loop."""
-
-    def __init__(self, type, text=None, name=None, input=None, id=None):
-        self.type = type
-        self.text = text
-        self.name = name
-        self.input = input
-        self.id = id
+def says(text: str) -> Reply:
+    """A turn that just answers."""
+    return Reply(text=text, stop="end")
 
 
-class _Response:
-    def __init__(self, content, stop_reason):
-        self.content = content
-        self.stop_reason = stop_reason
-        self.usage = None
+def wants(name: str, arguments: dict | None = None, call_id: str = "tu1") -> Reply:
+    """A turn that asks for one tool."""
+    return Reply(tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments or {})],
+                 stop="tools")
+
+
+class FakeConversation:
+    """History as plain turns. A real provider keeps its own shape; nothing here needs to."""
+
+    def __init__(self, history=None):
+        self.turns = list(history or [])
+
+    def user(self, text):
+        self.turns.append({"role": "user", "content": text})
+
+    def assistant(self, reply):
+        self.turns.append({"role": "assistant", "content": reply.text,
+                           "calls": [c.name for c in reply.tool_calls]})
+
+    def results(self, results):
+        self.turns.append({"role": "tool",
+                           "content": [r.payload for r in results],
+                           "errors": [r.is_error for r in results]})
+
+    def wire(self):
+        return self.turns
 
 
 class FakeModel:
-    """Returns queued responses in order. Each item is (content, stop_reason)."""
+    """Returns queued `Reply` objects in order."""
 
     def __init__(self, script):
         self.script = list(script)
         self.calls = 0
+        self.conversations: list[FakeConversation] = []
 
-    def message(self, **_kwargs):
+    def conversation(self, history=None):
+        convo = FakeConversation(history)
+        self.conversations.append(convo)
+        return convo
+
+    def converse(self, **_kwargs):
         self.calls += 1
-        content, stop = self.script.pop(0)
-        return _Response(content, stop)
+        return self.script.pop(0)
 
 
 class FakeNotion:
@@ -244,10 +267,8 @@ def test_the_loop_runs_a_tool_then_answers(ctx, monkeypatch):
     """One tool round-trip, then an end_turn. The loop must execute the tool, feed the
     result back, and return the final text."""
     ctx._model = FakeModel([
-        ([_Block("tool_use", name="search_notes",
-                 input={"query": "attention"}, id="tu1")], "tool_use"),
-        ([_Block("text", text="Your notes say attention scales by 1/sqrt(d_k).")],
-         "end_turn"),
+        wants("search_notes", {"query": "attention"}),
+        says("Your notes say attention scales by 1/sqrt(d_k)."),
     ])
     reply = run_turn(ctx, "what about attention?", session_id="ses1", chat_id="42")
 
@@ -257,7 +278,7 @@ def test_the_loop_runs_a_tool_then_answers(ctx, monkeypatch):
 
 
 def test_the_loop_persists_the_turn_for_continuity(ctx):
-    ctx._model = FakeModel([([_Block("text", text="hello")], "end_turn")])
+    ctx._model = FakeModel([says("hello")])
     run_turn(ctx, "hi", session_id="ses1", chat_id="42")
 
     messages = ctx.store.get_messages("ses1")
@@ -270,9 +291,8 @@ def test_the_loop_surfaces_an_approval_created_by_a_tool(ctx):
     patch = _patch(_cite())
     ctx.store.put_patch(patch)
     ctx._model = FakeModel([
-        ([_Block("tool_use", name="apply_patch",
-                 input={"patch_id": patch.patch_id}, id="tu1")], "tool_use"),
-        ([_Block("text", text="I've queued that for your approval.")], "end_turn"),
+        wants("apply_patch", {"patch_id": patch.patch_id}),
+        says("I've queued that for your approval."),
     ])
     reply = run_turn(ctx, f"apply {patch.patch_id}", session_id="ses1", chat_id="42")
 
@@ -284,9 +304,8 @@ def test_the_loop_recovers_from_a_tool_error(ctx):
     """A tool returning an error must become a result the model can react to, not an
     exception that kills the turn."""
     ctx._model = FakeModel([
-        ([_Block("tool_use", name="read_page",
-                 input={"page_id": "pg_missing"}, id="tu1")], "tool_use"),
-        ([_Block("text", text="That page isn't in your notes.")], "end_turn"),
+        wants("read_page", {"page_id": "pg_missing"}),
+        says("That page isn't in your notes."),
     ])
     reply = run_turn(ctx, "read pg_missing", session_id="ses1")
     assert reply.steps == 2
@@ -297,9 +316,43 @@ def test_the_loop_stops_at_the_step_cap(ctx):
     """A model that only ever calls tools must be stopped, not allowed to loop forever."""
     from palimpsest.agent import loop as loop_mod
 
-    forever = [([_Block("tool_use", name="list_pending", input={}, id=f"t{i}")],
-                "tool_use") for i in range(loop_mod.MAX_STEPS + 3)]
+    forever = [wants("list_pending", call_id=f"t{i}")
+               for i in range(loop_mod.MAX_STEPS + 3)]
     ctx._model = FakeModel(forever)
     reply = run_turn(ctx, "loop", session_id="ses1")
     assert reply.steps == loop_mod.MAX_STEPS
     assert reply.text  # a graceful message, not empty
+
+
+def test_the_loop_feeds_tool_results_back_before_asking_again(ctx):
+    """The round trip, checked from the conversation's side.
+
+    A loop that runs a tool and then asks the model again *without* handing back what the
+    tool returned looks identical from the outside — same text, same step count — and is
+    the bug that makes an agent repeat itself forever. So assert on the history.
+    """
+    ctx._model = FakeModel([
+        wants("search_notes", {"query": "attention"}),
+        says("Found it."),
+    ])
+    run_turn(ctx, "what about attention?", session_id="ses1")
+
+    turns = ctx._model.conversations[0].turns
+    roles = [t["role"] for t in turns]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    # The tool's own output, not a placeholder.
+    assert turns[2]["content"][0]["results"][0]["page_id"] == "pg_a"
+    assert turns[2]["errors"] == [False]
+
+
+def test_a_tool_error_is_marked_as_one_in_the_history(ctx):
+    """The model has to be able to tell a failure from an empty result."""
+    ctx._model = FakeModel([
+        wants("read_page", {"page_id": "pg_missing"}),
+        says("Not there."),
+    ])
+    run_turn(ctx, "read pg_missing", session_id="ses1")
+
+    tool_turn = next(t for t in ctx._model.conversations[0].turns if t["role"] == "tool")
+    assert tool_turn["errors"] == [True]
+    assert "error" in tool_turn["content"][0]

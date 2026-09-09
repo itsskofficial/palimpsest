@@ -57,7 +57,7 @@ def _op(relation, kind=OpKind.APPEND_BLOCK):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("autonomy", ["none", "low", "medium"])
+@pytest.mark.parametrize("autonomy", ["none", "low", "medium", "full"])
 @pytest.mark.parametrize("apply_on", [False, True])
 def test_a_contradiction_never_applies_at_any_setting(ctx, autonomy, apply_on):
     from palimpsest import approval
@@ -80,7 +80,7 @@ def test_a_contradiction_never_applies_at_any_setting(ctx, autonomy, apply_on):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("autonomy", ["none", "low", "medium"])
+@pytest.mark.parametrize("autonomy", ["none", "low", "medium", "full"])
 def test_writes_off_holds_everything_regardless_of_autonomy(ctx, autonomy):
     from palimpsest import approval
 
@@ -117,14 +117,38 @@ def test_only_two_tools_can_write_and_both_are_gated(ctx):
     assert {t.name for t in writers} == {"apply_patch", "undo_patch"}
 
 
-def test_settings_has_no_high_autonomy_level():
-    """The enum itself has no value above medium. 'Full autonomy' is not a thing the
-    system can be talked into because it does not exist."""
-    from palimpsest.config import AUTONOMY_LEVELS
+def test_no_autonomy_level_admits_the_contradiction_tier():
+    """The invariant itself, rather than a proxy for it.
 
-    assert set(AUTONOMY_LEVELS) == {"none", "low", "medium"}
-    with pytest.raises(ValueError):
-        Settings(autonomy="high").validate()
+    This test used to assert that the ladder stopped at `medium`, which was really a
+    stand-in for "there is no setting that auto-applies contradictions". Adding a `full`
+    level for people who want everything else automatic broke the proxy without touching
+    the property, so the property is now asserted directly: for *every* level that
+    exists, present or future, the high-risk tier is refused.
+    """
+    from palimpsest.config import AUTONOMY_LEVELS, NEVER_AUTOMATIC
+    from palimpsest.types import Relation
+
+    assert frozenset({"high"}) == NEVER_AUTOMATIC
+    assert Relation.CONTRADICTS.risk == "high"
+    assert Relation.CONTRADICTS.auto_appliable is False
+
+    for level in AUTONOMY_LEVELS:
+        assert "high" not in AUTONOMY_LEVELS[level], level
+        assert Settings(apply=True, autonomy=level).may_auto_apply("high") is False, level
+
+    # And no level may be invented at the boundary by spelling it optimistically.
+    for wishful in ("high", "all", "yolo", "everything"):
+        with pytest.raises(ValueError):
+            Settings(autonomy=wishful).validate()
+
+
+def test_full_autonomy_applies_everything_except_contradictions():
+    """What `full` buys, stated as a test so it cannot quietly come to mean more."""
+    s = Settings(apply=True, autonomy="full")
+    assert s.may_auto_apply("low") is True
+    assert s.may_auto_apply("medium") is True
+    assert s.may_auto_apply("high") is False
 
 
 def test_may_auto_apply_requires_both_switches():

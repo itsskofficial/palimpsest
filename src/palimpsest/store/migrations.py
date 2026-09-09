@@ -614,6 +614,56 @@ END $$;
 """
 
 
+# --- 0005: cached block embeddings ------------------------------------------
+#
+# Vectors are expensive to compute and free to keep. Without this table every process
+# that builds an index — the CLI, the queue worker, the server, each eval run — re-embeds
+# the same blocks against the same paid endpoint, which is both slow and a bill.
+#
+# `text_hash` is what makes the cache correct rather than merely fast: a block whose text
+# changed must not keep serving the vector of what it used to say, and Notion's
+# `last_edited_time` is per *page*, so it cannot answer that question. `model` is in the
+# key because vectors from two models are not comparable — mixing them silently produces
+# a similarity score that means nothing.
+
+_EMBEDDINGS_PG = """
+CREATE TABLE IF NOT EXISTS embeddings (
+    block_id   TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    text_hash  TEXT NOT NULL,
+    dim        INTEGER NOT NULL,
+    vector     BYTEA NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (block_id, model)
+);
+CREATE INDEX IF NOT EXISTS embeddings_model_idx ON embeddings (model);
+"""
+
+_EMBEDDINGS_RLS_PG = """
+-- Same reasoning as 0002: an embedding is a lossy copy of what you wrote.
+ALTER TABLE embeddings ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE ALL ON embeddings FROM anon, authenticated;
+  END IF;
+END $$;
+"""
+
+_EMBEDDINGS_SQLITE = """
+CREATE TABLE IF NOT EXISTS embeddings (
+    block_id   TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    text_hash  TEXT NOT NULL,
+    dim        INTEGER NOT NULL,
+    vector     BLOB NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (block_id, model)
+);
+CREATE INDEX IF NOT EXISTS embeddings_model_idx ON embeddings (model);
+"""
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         id="0001_init",
@@ -639,6 +689,12 @@ MIGRATIONS: list[Migration] = [
         description="agent sessions, procedural memory, the approval gate, and evals",
         postgres=_AGENT_PG + _AGENT_RLS_PG,
         sqlite=_AGENT_SQLITE,
+    ),
+    Migration(
+        id="0005_embeddings",
+        description="cached block vectors, keyed by model and text hash",
+        postgres=_EMBEDDINGS_PG + _EMBEDDINGS_RLS_PG,
+        sqlite=_EMBEDDINGS_SQLITE,
     ),
 ]
 
