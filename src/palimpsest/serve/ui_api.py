@@ -44,6 +44,11 @@ WRITABLE = {
     "GROQ_API_KEY", "DEEPGRAM_API_KEY", "SARVAM_API_KEY", "FIRECRAWL_API_KEY",
     "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL",
     "PALIMPSEST_APPLY", "PALIMPSEST_AUTONOMY",
+    # Choosing a provider is configuration, so the wizard and Settings can set it.
+    "OPENAI_API_KEY", "OPENROUTER_API_KEY",
+    "PALIMPSEST_MODEL", "PALIMPSEST_MODEL_PROVIDER", "PALIMPSEST_MODEL_BASE_URL",
+    "PALIMPSEST_MODEL_API_KEY",
+    "PALIMPSEST_EMBED_MODEL", "PALIMPSEST_EMBED_BASE_URL", "PALIMPSEST_EMBED_API_KEY",
 }
 
 #: How often the event stream looks for changes. Fast enough that a capture feels live,
@@ -310,7 +315,12 @@ def register(app, st) -> None:
                 continue
             source = _source_of(st.store, patch)
             applied = [op for op in patch.operations if op.applied_at]
-            reverted = [op for op in applied if getattr(op, "reverted_at", None)]
+            # Reversal is recorded in the ledger, not on the patch: `revert_patch`
+            # stamps `applied_ops.reverted_at` and sets the patch's status, and the
+            # in-memory operations it worked from are not written back. Reading the
+            # operation objects reported every undone patch as still undoable, which is
+            # a button that re-applies what you just took back.
+            reverted = patch_row["status"] == "reverted"
             rows.append({
                 "patch_id": patch.patch_id,
                 "status": patch_row["status"],
@@ -321,8 +331,8 @@ def register(app, st) -> None:
                 "applied": len(applied),
                 # Undoable means: it reached Notion, and it has not already been taken
                 # back. A rejected or still-pending patch has nothing to undo.
-                "undoable": bool(applied) and len(reverted) < len(applied),
-                "reverted": bool(reverted),
+                "undoable": bool(applied) and not reverted,
+                "reverted": reverted,
                 "relations": sorted({op.relation.value for op in patch.operations
                                      if op.relation}),
                 "pages": sorted({p for p in (_page_name(st.store, op) for op in

@@ -77,7 +77,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - name: Contradictions are never auto-appliable, at any autonomy level
+      - name: Contradictions apply only at the top rung, and only as a record
         run: |
           python -c "
           from palimpsest.config import AUTONOMY_LEVELS, Settings
@@ -85,15 +85,39 @@ jobs:
           assert Relation.CONTRADICTS.auto_appliable is False
           assert 'high' not in AUTONOMY_LEVELS
           for level in AUTONOMY_LEVELS:
-              s = Settings(apply=True, autonomy=level)
-              assert not s.may_auto_apply('high'), level
-          print('contradictions cannot be applied automatically at any level')
+              if level == 'everything':
+                  continue
+              assert not Settings(apply=True, autonomy=level).may_auto_apply('high'), level
+          assert Settings(apply=True, autonomy='everything').may_auto_apply('high')
+          assert not Settings(apply=False, autonomy='everything').may_auto_apply('high')
+          print('contradictions apply only at autonomy=everything, and only with apply=on')
+          "
+      - name: What that rung applies is a record, never a rewrite
+        # The property that makes the top rung offerable: the system never decides which
+        # of two sourced claims is true. It appends the disagreement beside the line and
+        # leaves the line alone, so the whole thing inverts by removing one block.
+        run: |
+          python -c "
+          from palimpsest.plan import plan
+          from palimpsest.types import Claim, ClaimType, Judgement, OpKind, Relation, Source, new_id
+          class S:
+              def get_page(self, _): return None
+              def get_block(self, _): return None
+          claim = Claim(claim_id=new_id('clm_'), text='The opposite holds.', type=ClaimType.FACT, topics=())
+          j = Judgement(claim_id=claim.claim_id, relation=Relation.CONTRADICTS, confidence=0.99,
+                        target_block_id='bk1', target_page_id='pg1', rationale='r', model='m')
+          src = Source(source_id=new_id('src_'), kind='text', title='t', text=claim.text)
+          result = plan([j], {claim.claim_id: claim}, src, S(), record_contradictions=True)
+          kinds = {op.kind for op in result.patch.operations}
+          assert kinds == {OpKind.APPEND_BLOCK}, kinds
+          assert not (kinds & {OpKind.UPDATE_TEXT, OpKind.STRIKE_BLOCK, OpKind.ARCHIVE_BLOCK})
+          print('a recorded contradiction is one append and edits nothing')
           "
       - name: apply=off vetoes every relation
         run: |
           python -c "
           from palimpsest.config import Settings
-          s = Settings(apply=False, autonomy='medium')
+          s = Settings(apply=False, autonomy='everything')
           assert not any(s.may_auto_apply(r) for r in ('low', 'medium', 'high'))
           print('apply=off vetoes every relation')
           "

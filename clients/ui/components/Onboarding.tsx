@@ -168,7 +168,50 @@ function Welcome({ onNext }: { onNext: () => void }) {
   );
 }
 
+/**
+ * The providers the wizard offers, and what each one costs you to start.
+ *
+ * palimpsest speaks the OpenAI chat-completions standard, so this list is a convenience
+ * rather than a limit — anything with a compatible endpoint works by setting a base URL
+ * in Settings afterwards. What the wizard owes a first-time user is a short list with an
+ * honest note on each, not every option there is.
+ */
+const PROVIDERS: {
+  id: string;
+  label: string;
+  where: string;
+  hint: string;
+  placeholder: string;
+  keyName: string;
+}[] = [
+  {
+    id: "anthropic",
+    label: "Claude",
+    where: "console.anthropic.com → API keys",
+    hint: "What the classifier was built and measured against.",
+    placeholder: "sk-ant-…",
+    keyName: "ANTHROPIC_API_KEY",
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    where: "platform.openai.com → API keys",
+    hint: "Also unlocks embeddings, which help it find a page you worded differently.",
+    placeholder: "sk-…",
+    keyName: "OPENAI_API_KEY",
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    where: "console.groq.com → API keys",
+    hint: "Fast and very cheap. Open models score lower on the classifier eval — run `palimpsest eval component` before trusting it with autonomy.",
+    placeholder: "gsk_…",
+    keyName: "GROQ_API_KEY",
+  },
+];
+
 function ClaudeStep({ onNext }: { onNext: () => void }) {
+  const [provider, setProvider] = useState(PROVIDERS[0]);
   const [token, setToken] = useState("");
   const [state, setState] = useState<"idle" | "busy" | "ok" | "err">("idle");
   const [msg, setMsg] = useState("");
@@ -177,13 +220,20 @@ function ClaudeStep({ onNext }: { onNext: () => void }) {
     if (!token.trim()) return;
     setState("busy");
     try {
-      const r = await api.validate("anthropic", token.trim());
-      if (!r.ok) {
-        setState("err");
-        setMsg(r.detail ?? r.error ?? "That does not look right");
-        return;
+      // Only Anthropic keys have a cheap shape check; the rest are validated by their
+      // first real call, which fails with a clear message rather than a mystery.
+      if (provider.id === "anthropic") {
+        const r = await api.validate("anthropic", token.trim());
+        if (!r.ok) {
+          setState("err");
+          setMsg(r.detail ?? r.error ?? "That does not look right");
+          return;
+        }
       }
-      await api.saveSettings({ ANTHROPIC_API_KEY: token.trim() });
+      await api.saveSettings({
+        [provider.keyName]: token.trim(),
+        PALIMPSEST_MODEL_PROVIDER: provider.id,
+      });
       setState("ok");
       setTimeout(onNext, 500);
     } catch (e) {
@@ -194,17 +244,37 @@ function ClaudeStep({ onNext }: { onNext: () => void }) {
 
   return (
     <div>
-      <Title sub="Claude reads what you send, pulls out the claims, and works out how each one relates to your notes.">
+      <Title sub="It reads what you send, pulls out the claims, and works out how each one relates to your notes.">
         The brain
       </Title>
-      <p className="mt-4 text-[13px] text-faint">
-        Get a key at console.anthropic.com → API keys
-      </p>
+
+      <div className="mt-4 flex gap-2">
+        {PROVIDERS.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => {
+              setProvider(p);
+              setState("idle");
+            }}
+            className={`rounded-lg border px-3 py-1.5 text-[13px] transition ${
+              provider.id === p.id
+                ? "border-sepia bg-sepia/10 text-ink"
+                : "border-rule text-soft hover:border-sepia/50"
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="mt-3 text-[13px] text-soft">{provider.hint}</p>
+      <p className="mt-1 text-[13px] text-faint">Get a key at {provider.where}</p>
+
       <div className="mt-3 space-y-3">
         <Field
           value={token}
           onChange={setToken}
-          placeholder="sk-ant-…"
+          placeholder={provider.placeholder}
           onEnter={submit}
         />
         {state === "err" && <Note kind="err">{msg}</Note>}
@@ -212,10 +282,15 @@ function ClaudeStep({ onNext }: { onNext: () => void }) {
         <Primary onClick={submit} disabled={state === "busy" || !token.trim()}>
           {state === "busy" ? "Checking…" : "Continue"}
         </Primary>
+        <p className="text-[12px] text-faint">
+          Anything else that speaks the OpenAI API — OpenRouter, a local Ollama — works
+          too. Add it from Settings once you are set up.
+        </p>
       </div>
     </div>
   );
 }
+
 
 function NotionStep({ onNext }: { onNext: (token: string) => void }) {
   const [token, setToken] = useState("");

@@ -553,3 +553,99 @@ def test_rejecting_something_that_cannot_be_rejected_is_an_error_not_a_success(u
     response = ui.post("/v1/approvals/apr_does_not_exist/resolve",
                        json={"decision": "rejected"})
     assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# the ledger, and the button that makes autonomy offerable
+# ---------------------------------------------------------------------------
+
+
+def _applied_patch(client, *, relation=Relation.CORROBORATES):
+    """Put one applied operation through the real gate, so the ledger is real."""
+    from palimpsest import approval
+
+    op = Operation(kind=OpKind.ADD_CITATION, target="bk_1", relation=relation,
+                   payload={"label": "src", "rationale": "already stated"})
+    patch = Patch(patch_id=new_id("pch_"), source_id="src_1", operations=[op])
+    client.state.store.put_patch(patch)
+    approval.gate(client.state.store, patch,
+                  Settings(apply=True, autonomy="full", notion_token="ntn_test"),
+                  notion_factory=lambda: client.notion, journal_factory=None)
+    return patch
+
+
+def test_activity_lists_what_happened_and_what_can_still_be_taken_back(wired_ui):
+    patch = _applied_patch(wired_ui)
+
+    rows = wired_ui.get("/v1/activity").json()["activity"]
+    entry = next(r for r in rows if r["patch_id"] == patch.patch_id)
+
+    assert entry["applied"] == 1
+    assert entry["undoable"] is True
+    assert entry["reverted"] is False
+    assert "corroborates" in entry["relations"]
+
+
+def test_undo_reverses_an_applied_patch_and_says_so_afterwards(wired_ui):
+    """The promise the whole autonomy ladder rests on.
+
+    Every operation carries an inverse computed before it ran, so this is a real
+    reversal rather than a compensating guess. If undo were best-effort, "let it write
+    to my notes on its own" would be a much larger thing to ask.
+    """
+    patch = _applied_patch(wired_ui)
+
+    response = wired_ui.post(f"/v1/patches/{patch.patch_id}/undo")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+    rows = wired_ui.get("/v1/activity").json()["activity"]
+    entry = next(r for r in rows if r["patch_id"] == patch.patch_id)
+    assert entry["reverted"] is True
+    assert entry["undoable"] is False
+
+
+def test_undoing_the_same_patch_twice_is_refused(wired_ui):
+    """A second undo would invert an inverse — re-applying what the user just took
+    back, which is the opposite of what the button says."""
+    patch = _applied_patch(wired_ui)
+    assert wired_ui.post(f"/v1/patches/{patch.patch_id}/undo").status_code == 200
+
+    again = wired_ui.post(f"/v1/patches/{patch.patch_id}/undo")
+    assert again.status_code == 409
+
+
+def test_undoing_a_patch_that_never_applied_is_refused_not_silently_accepted(ui):
+    """A pending proposal has nothing in Notion to reverse. Answering 200 would tell the
+    user their notes had been restored when nothing had happened at all."""
+    op = Operation(kind=OpKind.ADD_CITATION, target="bk_1", relation=Relation.CORROBORATES,
+                   payload={"label": "src"})
+    patch = Patch(patch_id=new_id("pch_"), source_id="src_1", operations=[op])
+    ui.state.store.put_patch(patch)
+
+    assert ui.post(f"/v1/patches/{patch.patch_id}/undo").status_code in (400, 409)
+
+
+def test_undoing_a_patch_that_does_not_exist_is_a_404(wired_ui):
+    assert wired_ui.post("/v1/patches/pch_nope/undo").status_code == 404
+
+
+def test_activity_is_one_list_rather_than_one_per_door(wired_ui):
+    """Auto-applied, approved and rejected are the same event to a reader — something
+    was proposed and this is what became of it. Splitting them by which surface resolved
+    them makes the history unreadable exactly when you are hunting for a bad change."""
+    from palimpsest import approval
+
+    applied = _applied_patch(wired_ui)
+
+    held_op = Operation(kind=OpKind.ADD_CITATION, target="bk_1",
+                        relation=Relation.CORROBORATES, payload={"label": "s"})
+    held = Patch(patch_id=new_id("pch_"), source_id="src_2", operations=[held_op])
+    wired_ui.state.store.put_patch(held)
+    out = approval.gate(wired_ui.state.store, held,
+                        Settings(apply=False, autonomy="none"))
+    wired_ui.post(f"/v1/approvals/{out['approval_id']}/resolve",
+                  json={"decision": "rejected"})
+
+    ids = {r["patch_id"] for r in wired_ui.get("/v1/activity").json()["activity"]}
+    assert {applied.patch_id, held.patch_id} <= ids
