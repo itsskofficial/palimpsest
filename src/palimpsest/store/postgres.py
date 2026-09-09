@@ -269,6 +269,17 @@ class PostgresStore:
             cur.execute("SELECT page_id, last_edited FROM pages")
             return {r[0]: (r[1] or "") for r in cur.fetchall()}
 
+    def drop_missing_blocks(self, page_id: str, seen_block_ids: set[str]) -> int:
+        """See the SQLite implementation."""
+        with self._cur(dict_rows=False) as cur:
+            cur.execute("SELECT block_id FROM blocks WHERE page_id=%s AND archived=false",
+                        (page_id,))
+            gone = {r[0] for r in cur.fetchall()} - seen_block_ids
+            if gone:
+                cur.executemany("UPDATE blocks SET archived=true WHERE block_id=%s",
+                                [(b,) for b in gone])
+        return len(gone)
+
     def drop_missing(self, seen_page_ids: set[str],
                      within: tuple[str, ...] | None = None) -> int:
         """See the SQLite implementation for why `within` exists.

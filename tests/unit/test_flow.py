@@ -679,3 +679,42 @@ def test_archiving_a_page_archives_its_blocks(store):
     assert dropped == 1
     live = {b["block_id"] for b in store.get_blocks()}
     assert live == {"bk_keep"}
+
+
+def test_refreshing_a_page_retires_the_blocks_that_left_it(store):
+    """`put_blocks` only ever adds and updates. Without a matching retirement, a block
+    deleted in Notion — or removed by an undo — stays a live retrieval candidate for
+    ever, and the next apply against it fails with "Can't edit block that is archived".
+
+    That error names a page the user deleted an hour ago during something unrelated, so
+    it is close to untraceable from the outside: it took three identical failed captures
+    to find. The mirror had 21 stale blocks on one page when this was written.
+    """
+    store.put_pages([{"page_id": "pg_1", "title": "A page", "last_edited": "1"}])
+    store.put_blocks([
+        {"block_id": f"bk_{i}", "page_id": "pg_1", "type": "paragraph",
+         "position": i, "text": f"line {i}"} for i in range(3)
+    ])
+    assert len(store.get_blocks("pg_1")) == 3
+
+    # A later read of the page finds only the first block.
+    dropped = store.drop_missing_blocks("pg_1", {"bk_0"})
+
+    assert dropped == 2
+    assert [b["block_id"] for b in store.get_blocks("pg_1")] == ["bk_0"]
+
+
+def test_retiring_blocks_leaves_other_pages_alone(store):
+    """The sweep is scoped to one page, because a refresh only ever read one page."""
+    store.put_pages([{"page_id": "pg_1", "title": "One", "last_edited": "1"},
+                     {"page_id": "pg_2", "title": "Two", "last_edited": "1"}])
+    store.put_blocks([
+        {"block_id": "bk_1", "page_id": "pg_1", "type": "paragraph", "position": 0,
+         "text": "a"},
+        {"block_id": "bk_2", "page_id": "pg_2", "type": "paragraph", "position": 0,
+         "text": "b"},
+    ])
+
+    store.drop_missing_blocks("pg_1", set())
+
+    assert [b["block_id"] for b in store.get_blocks()] == ["bk_2"]

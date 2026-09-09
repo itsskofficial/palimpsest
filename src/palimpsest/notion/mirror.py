@@ -256,6 +256,9 @@ def refresh_pages(client: NotionClient, store, page_ids: Iterable[str], *,
         store.put_pages([row])
         if blocks:
             store.put_blocks(blocks)
+        # Retire whatever is no longer on the page. `put_blocks` only ever adds and
+        # updates, so without this a deleted block stays a live retrieval candidate.
+        store.drop_missing_blocks(pid, {b["block_id"] for b in blocks})
         refreshed += 1
     return refreshed
 
@@ -335,6 +338,9 @@ def sync(client: NotionClient, store, *, incremental: bool = True,
         store.put_pages([row])
         if blocks:
             store.put_blocks(blocks)
+        # Retire whatever is no longer on the page. `put_blocks` only ever adds and
+        # updates, so without this a deleted block stays a live retrieval candidate.
+        store.drop_missing_blocks(pid, {b["block_id"] for b in blocks})
         result.pages += 1
         result.blocks += len(blocks)
 

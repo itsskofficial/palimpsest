@@ -211,6 +211,29 @@ class SQLiteStore:
         return {r[0]: (r[1] or "") for r in self.conn.execute(
             "SELECT page_id, last_edited FROM pages")}
 
+    def drop_missing_blocks(self, page_id: str, seen_block_ids: set[str]) -> int:
+        """Archive blocks the mirror still holds for a page that are no longer on it.
+
+        `put_blocks` upserts, so a re-read of a page adds and updates but never retires.
+        A block deleted in Notion — or removed by an undo — therefore stayed live in the
+        mirror for ever, and a live block is a retrieval candidate: the classifier would
+        corroborate a sentence that no longer exists and the apply would fail with
+        "Can't edit block that is archived". A capture of one Wikipedia article failed
+        this way three times before the cause was found, because the error named a page
+        the user had deleted an hour earlier during something unrelated.
+
+        Called with the blocks a *complete* read of the page returned; a partial read
+        would archive the remainder, so callers that page through must accumulate first.
+        """
+        rows = self.conn.execute(
+            "SELECT block_id FROM blocks WHERE page_id=? AND archived=0", (page_id,))
+        gone = {r[0] for r in rows} - seen_block_ids
+        if gone:
+            self.conn.executemany("UPDATE blocks SET archived=1 WHERE block_id=?",
+                                  [(b,) for b in gone])
+            self.conn.commit()
+        return len(gone)
+
     def drop_missing(self, seen_page_ids: set[str],
                      within: tuple[str, ...] | None = None) -> int:
         """Mark pages absent from a full sync as archived.
