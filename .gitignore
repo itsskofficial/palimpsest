@@ -29,7 +29,10 @@ archive/
 *.db
 *.db-wal
 *.db-shm
-data/
+# The local mirror/archive directory at the repo root — NOT `src/**/data`, which is
+# packaged fixture content. An unanchored `data/` swallowed the eval workspace, so the
+# golden set was neither committed nor shipped in the wheel.
+/data/
 
 # secrets and local state
 .env

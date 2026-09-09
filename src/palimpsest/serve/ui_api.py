@@ -281,8 +281,13 @@ def register(app, st) -> None:
             by=payload.get("by") or "ui",
             notion_factory=(lambda: st.notion) if st.settings.has_notion else None,
             journal_factory=(lambda: st.journal) if st.settings.has_notion else None)
-        if not result.get("ok") and decision == "approved":
-            raise HTTPException(409, result.get("error") or "could not apply")
+        # Any failure is a failure, including a rejection. The `and decision ==
+        # "approved"` this used to carry meant that rejecting an approval which was
+        # missing, already resolved or expired returned 200 with `ok: false` — so the UI
+        # rendered a successful rejection that had not happened, and the card stayed gone
+        # while the proposal stayed pending.
+        if not result.get("ok"):
+            raise HTTPException(409, result.get("error") or f"could not {decision[:-1]}")
         st.refresh_index()
         return result
 

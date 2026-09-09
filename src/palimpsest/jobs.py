@@ -186,6 +186,7 @@ def ingest_runner(settings, *, model_factory: Callable[[], Any],
     """
 
     def run(job: dict, store) -> dict:
+        from palimpsest import embed
         from palimpsest.pipeline import ingest as run_pipeline
         from palimpsest.retrieve import Index
 
@@ -194,12 +195,16 @@ def ingest_runner(settings, *, model_factory: Callable[[], Any],
             raise ValueError("the job has no spec to ingest")
         if not settings.has_model:
             raise RuntimeError(
-                "ANTHROPIC_API_KEY is not set; extraction needs a model. The mirror, "
-                "the sweeps and undo all work without one.")
+                "no model is configured; extraction needs one. Set ANTHROPIC_API_KEY, "
+                "OPENAI_API_KEY or GROQ_API_KEY, or PALIMPSEST_MODEL_BASE_URL for any "
+                "other OpenAI-compatible endpoint. The mirror, the sweeps and undo all "
+                "work without one.")
 
         result = run_pipeline(
             spec, store, model_factory(), settings=settings,
-            kind=job.get("source_kind"), index=Index(store), archive=archive,
+            kind=job.get("source_kind"),
+            index=Index(store, embedder=embed.resolve(settings, store=store)),
+            archive=archive,
             title=job.get("title"), url=job.get("url"),
         )
         payload = result.as_dict()

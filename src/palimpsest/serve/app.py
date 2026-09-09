@@ -76,7 +76,10 @@ class AppState:
 
         count = self.store.stats().get("blocks", 0)
         if self._index is None or self._index_blocks != count:
-            self._index = Index(self.store)
+            from palimpsest import embed
+
+            self._index = Index(self.store,
+                                embedder=embed.resolve(self.settings, store=self.store))
             self._index_blocks = count
         return self._index
 

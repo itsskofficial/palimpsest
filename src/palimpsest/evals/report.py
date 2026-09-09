@@ -32,11 +32,17 @@ def record(store, suite: str, metrics: dict, *, model: str | None = None) -> str
         from palimpsest import trace
 
         if trace.enabled():
-            for name, value in scores.items():
-                trace.score(f"eval.{suite}.{name}", float(value))
-            # Per-relation F1 too, so a regression on one relation is visible.
-            for rel, m in (metrics.get("per_relation") or {}).items():
-                trace.score(f"eval.{suite}.f1.{rel}", float(m["f1"]))
+            # Inside a span on purpose. A score with no trace to attach to is dropped,
+            # and Langfuse says so once per score — six identical warnings for one eval
+            # run, which reads like a broken install rather than a missing parent.
+            with trace.span(f"eval-{suite}", kind="span",
+                            metadata={"model": model, "n": metrics.get("n", 0)}) as sp:
+                for name, value in scores.items():
+                    trace.score(f"eval.{suite}.{name}", float(value))
+                # Per-relation F1 too, so a regression on one relation is visible.
+                for rel, m in (metrics.get("per_relation") or {}).items():
+                    trace.score(f"eval.{suite}.f1.{rel}", float(m["f1"]))
+                sp.update(output={"passed": metrics.get("passed"), **scores})
             trace.flush()
     except Exception as e:  # pragma: no cover - reporting is never load-bearing
         log.debug("could not push eval scores to Langfuse: %s", e)

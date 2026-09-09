@@ -304,8 +304,8 @@ def cmd_organise(args) -> int:
 
 
 def cmd_eval(args) -> int:
-    """Measure the classifier against the golden set, or grow the set from history."""
-    from palimpsest.evals import component, golden, report
+    """Measure retrieval and the classifier, or grow the golden set from history."""
+    from palimpsest.evals import component, golden, report, retrieval
 
     store, settings = _store(args)
     try:
@@ -321,14 +321,35 @@ def cmd_eval(args) -> int:
                       f"{'PASS' if run['passed'] else 'FAIL'}  "
                       f"weighted_f1={s.get('weighted_f1', '?')} n={s.get('n', 0)}")
             return 0
+        if args.suite == "retrieval":
+            # Deliberately no model: this is the one suite that measures a part of the
+            # system needing neither a key nor a network, which is why CI runs it.
+            from palimpsest import embed
+
+            metrics = retrieval.run(
+                store, embedder=embed.resolve(settings, store=store),
+                seed_store=args.fixture)
+            print(retrieval.summary(metrics))
+            report.record(store, "retrieval", metrics, model="none")
+            _emit(metrics, args.out)
+            return 0 if metrics.get("passed") else 1
+
         if args.suite == "component":
+            from palimpsest import embed
+            from palimpsest.evals import fixture
             from palimpsest.retrieve import Index
 
             model = _model(settings)
-            metrics = component.run(store, model, Index(store))
+            examples = None
+            if args.fixture:
+                fixture.seed(store)
+                examples = fixture.golden_examples()
+            index = Index(store, embedder=embed.resolve(settings, store=store))
+            metrics = component.run(store, model, index, examples=examples)
             print(component.scorecard(metrics))
             if not metrics.get("error"):
-                run_id = report.record(store, "component", metrics, model=settings.model)
+                run_id = report.record(store, "component", metrics,
+                                       model=f"{model.name}/{model.model}")
                 print(f"\n  recorded as {run_id}")
             _emit(metrics, args.out)
             return 0 if metrics.get("passed") else 1
@@ -698,10 +719,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--show", type=int, default=15, help="how many to print")
     sp.set_defaults(func=cmd_organise)
 
-    sp = sub.add_parser("eval", help="measure the classifier against the golden set")
-    sp.add_argument("suite", choices=["component", "bootstrap", "history"])
+    sp = sub.add_parser("eval", help="measure retrieval and the classifier")
+    sp.add_argument("suite", choices=["retrieval", "component", "bootstrap", "history"])
     common(sp)
     sp.add_argument("--limit", type=int, default=20)
+    sp.add_argument("--fixture", action="store_true", default=True,
+                    help="run against the workspace committed with the package "
+                         "(default; the same notes on every machine)")
+    sp.add_argument("--mine", dest="fixture", action="store_false",
+                    help="run against your own mirror and your own labelled examples")
     sp.set_defaults(func=cmd_eval)
 
     sp = sub.add_parser("agent", help="talk to your notes from the terminal")

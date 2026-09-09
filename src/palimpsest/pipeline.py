@@ -192,7 +192,11 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
     # -- 5. retrieve + classify -------------------------------------------
     if index is None:
         t0 = time.perf_counter()
-        index = Index(store)
+        # `resolve` returns None when no embedding provider is configured, and `Index`
+        # reads that as "lexical only". Nothing here has to branch on it.
+        from palimpsest import embed
+
+        index = Index(store, embedder=embed.resolve(settings, store=store))
         stages["index"] = {"seconds": round(time.perf_counter() - t0, 2),
                            "blocks": len(index), "pages": index.n_pages}
 
