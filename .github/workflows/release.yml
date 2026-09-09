@@ -17,29 +17,11 @@ permissions:
   contents: write
 
 jobs:
-  ui:
-    # Built once and shared, so all three installers wrap byte-identical assets and the
-    # export cannot differ between platforms.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: clients/ui/package-lock.json
-      - run: npm ci
-        working-directory: clients/ui
-      - run: npm run build && node scripts/ship.mjs
-        working-directory: clients/ui
-      - name: The export the package will serve
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-static
-          path: src/palimpsest/serve/static/
-
   installers:
-    needs: ui
+    # The installers do not contain the UI. They contain an Electron shell that installs
+    # `palimpsest-notion` from PyPI on first run and points a window at it, so the
+    # interface people see is the one in whichever release of the Python package they
+    # end up with — not one frozen into the .exe at tag time.
     strategy:
       fail-fast: false
       matrix:
@@ -56,13 +38,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Take the shared export
-        uses: actions/download-artifact@v4
-        with:
-          name: ui-static
-          path: src/palimpsest/serve/static/
       - run: npm install
         working-directory: clients/desktop
+      # The tag is the version of record. Without this the installer would be named for
+      # whatever is in package.json, so `v0.2.0` could ship `palimpsest-0.1.0-setup.exe`
+      # and nobody could tell from the filename what they had downloaded.
+      - name: Name the shell after the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        working-directory: clients/desktop
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
       # Unsigned on purpose. A certificate is a per-publisher secret this repository does
       # not have; users get a SmartScreen warning, which is honest about what this is.
       - run: npx electron-builder --publish never

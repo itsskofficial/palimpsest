@@ -121,6 +121,9 @@ jobs:
         # Not a byte-for-byte diff — hashed filenames make that brittle across Node
         # patch versions. This asserts the weaker, useful thing: the copy in the package
         # is complete, so `pip install` serves a UI that actually loads.
+        # `pip install -e .` because the shared conftest imports palimpsest. The core has
+        # no dependencies, so this costs a couple of seconds.
         run: |
           node clients/ui/scripts/ship.mjs
-          pip install pytest && python -m pytest tests/unit/test_ui_bundle.py -q
+          pip install -e . pytest
+          python -m pytest tests/unit/test_ui_bundle.py -q
