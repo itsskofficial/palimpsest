@@ -117,6 +117,39 @@ def _build_inverse(store, op: Operation) -> dict | None:
     if op.kind == OpKind.ARCHIVE_BLOCK:
         return {"kind": "restore_block", "target": op.target, "payload": {}}
 
+    if op.kind is OpKind.REWRITE_SECTION:
+        # Half of the inverse is known now — which blocks to put back, and what they
+        # said — and half is not: the ids of the blocks about to be created. The first
+        # half is captured here because after the operation runs those blocks are in
+        # the trash and their content is no longer readable from the mirror.
+        #
+        # Restoring by un-trashing was the obvious implementation and is wrong: Notion
+        # returns a restored block to the *end* of the page, so undoing a rewrite would
+        # hand back the right paragraphs in the wrong order. Re-creating them from the
+        # snapshot costs new block ids and keeps the reading order, which is the trade
+        # a reader would choose.
+        snapshot = []
+        for bid in op.payload.get("replaced") or []:
+            block = store.get_block(bid)
+            if block is None:
+                continue
+            rebuilt = B.strip_readonly(block.get("raw") or {})
+            if rebuilt is not None:
+                snapshot.append(rebuilt)
+        return {
+            "kind": "restore_section",
+            "target": op.target,
+            "payload": {"anchor_block_id": op.payload.get("anchor_block_id"),
+                        "snapshot": snapshot, "created_block_ids": []},
+        }
+
+    if op.kind is OpKind.SET_COVER:
+        page = store.get_page(op.target)
+        if page is None:
+            return None
+        return {"kind": OpKind.SET_COVER.value, "target": op.target,
+                "payload": {"url": (page.get("cover") or None)}}
+
     # Structural operations invert to the page's current filing, which the mirror
     # already holds. A page missing from the mirror gets no inverse and is therefore
     # refused below rather than applied irreversibly.
@@ -176,6 +209,14 @@ def _stamp_inverse(op: Operation, response: dict) -> None:
             # Undo of "append N blocks" is "archive those N blocks".
             op.inverse = {"kind": "archive_blocks", "target": op.target,
                           "payload": {"block_ids": ids}}
+    elif op.kind is OpKind.REWRITE_SECTION:
+        created = [(b.get("id") or "").replace("-", "")
+                   for b in (response.get("results") or []) if b.get("id")]
+        op.result = {"created_block_ids": created,
+                     "replaced_block_ids": list(op.payload.get("replaced") or [])}
+        if op.inverse is not None:
+            # The precomputed half already holds the snapshot; this is the other half.
+            op.inverse["payload"]["created_block_ids"] = created
     elif op.kind is OpKind.CREATE_PAGE:
         pid = (response.get("id") or "").replace("-", "")
         op.result = {"page_id": pid, "url": response.get("url")}
@@ -238,6 +279,24 @@ def _execute(client: NotionClient, store, op: Operation, patch: Patch | None = N
             results.extend(resp.get("results") or [])
             first = first or resp
         return {"results": results}
+
+    if op.kind is OpKind.REWRITE_SECTION:
+        children = p.get("children") or []
+        if not children:
+            raise ValueError("a rewrite with no replacement content would empty the page")
+        # Append first, archive second. The new content lands immediately after the
+        # anchor — which is the block *before* the section — so it takes the section's
+        # place, and only then do the old blocks go. Doing it the other way round leaves
+        # the page visibly empty for the duration of the call, and leaves it permanently
+        # empty if the append then fails.
+        response = client.append_children(op.target, children[:100],
+                                          after_block_id=p.get("anchor_block_id"))
+        for bid in p.get("replaced") or []:
+            client.archive_block(bid)
+        return response
+
+    if op.kind is OpKind.SET_COVER:
+        return client.set_page_cover(op.target, p.get("url"))
 
     if op.kind is OpKind.UPDATE_TEXT:
         block = store.get_block(op.target)
@@ -318,6 +377,22 @@ def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
             client.archive_block(bid)
     elif kind == "archive_page":
         client.archive_page(target)
+    elif kind == "restore_section":
+        # Mirror image of the apply: put the originals back where they were, then take
+        # away what replaced them.
+        # Null-stripped again here, not only when the snapshot was taken. An inverse is
+        # data that outlives the code that wrote it: a patch applied last month carries
+        # whatever `strip_readonly` produced last month, and an undo that fails because
+        # of a since-fixed bug is the worst possible time to discover the bug. This is
+        # the last place the shape can be corrected before it reaches Notion.
+        snapshot = [B.drop_nulls(b) for b in (payload.get("snapshot") or [])]
+        if snapshot:
+            client.append_children(target, snapshot[:100],
+                                   after_block_id=payload.get("anchor_block_id"))
+        for bid in payload.get("created_block_ids") or []:
+            client.archive_block(bid)
+    elif kind == OpKind.SET_COVER.value:
+        client.set_page_cover(target, payload.get("url"))
     elif kind == "restore_block":
         client.restore_block(target)
     elif kind == OpKind.MOVE_PAGE.value:

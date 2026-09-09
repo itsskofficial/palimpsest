@@ -217,15 +217,33 @@ def test_an_expired_approval_will_not_apply(ctx):
 
 
 def test_exactly_the_gated_tools_can_write(ctx):
-    """A safety invariant: the set of tools that can change Notion is exactly the two we
-    route through the gate. A new writing tool must be a deliberate change to this list."""
+    """A safety invariant: the set of tools that can change Notion is a closed list, and
+    every one of them routes through the approval gate.
+
+    The list grew when the agent gained authorship — `rewrite_page` can replace a whole
+    page — so the useful assertion is no longer the count. It is that adding a writing
+    tool is a deliberate edit here, and that the tool cannot reach Notion except through
+    the same door as the smallest citation.
+    """
+    import inspect
+
+    from palimpsest.agent import registry as reg
+
     writers = {t.name for t in build_registry(ctx) if t.writes}
-    assert writers == {"apply_patch", "undo_patch"}
+    assert writers == {"apply_patch", "undo_patch", "rewrite_page"}
+
+    # `bind` wraps each handler in a closure, so the tool object no longer carries the
+    # code. The handlers are module-level and named after their tool, which is what lets
+    # this look at what they actually do rather than at a lambda.
+    for name in writers:
+        source = inspect.getsource(getattr(reg, f"_{name}"))
+        assert "approval.gate" in source or "revert_patch" in source, (
+            f"{name} writes but does not go through the gate")
 
 
-def test_fifteen_tools_and_every_schema_is_well_formed(ctx):
+def test_every_tool_schema_is_well_formed(ctx):
     reg = build_registry(ctx)
-    assert len(reg) == 15
+    assert len(reg) == 16
     for t in reg:
         assert t.input_schema["type"] == "object"
         assert "properties" in t.input_schema

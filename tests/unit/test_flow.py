@@ -527,9 +527,22 @@ def test_two_claims_on_one_topic_create_one_page_not_two():
     assert creations[0].payload["merged_claims"] == [judgements[1].claim_id]
 
 
-def test_pages_with_different_titles_are_still_created_separately():
-    """The merge is by title. Two genuinely different topics in one document must not be
-    collapsed into one page just because they arrived together."""
+def test_one_source_creates_at_most_one_new_page():
+    """Two topics in one document are two sections, not two pages.
+
+    This test used to assert the opposite, and the opposite was wrong. Folding page
+    creations by *title* fixed the obvious duplication and left a subtler one: a single
+    article about retrieval produced six pages — "Retrieval-Augmented Generation",
+    "Retrieval", "Reranking", "Bi-Encoder" — because every claim carried a different
+    topic string, so no two titles ever collided. Four of them were one sentence long.
+    That is the same fragmentation the product exists to prevent, reached by a different
+    route, and a reader cannot tell the difference.
+
+    Claims that belong on pages you already have are untouched by this: they were never
+    page creations. This only governs material that has nowhere to go, and the composer
+    turns it into sections — a job it does better than the planner, because it sees the
+    claims together.
+    """
     from palimpsest.plan import plan
     from palimpsest.types import (
         Claim,
@@ -541,9 +554,9 @@ def test_pages_with_different_titles_are_still_created_separately():
         new_id,
     )
 
-    source = Source(source_id=new_id("src_"), kind="text", title="note", text="x")
+    source = Source(source_id=new_id("src_"), kind="text", title="One article", text="x")
     claims, judgements = {}, []
-    for topic in ("attention", "softmax"):
+    for topic in ("attention", "softmax", "reranking", "chunking"):
         claim = Claim(claim_id=new_id("clm_"), text=f"A fact about {topic}.",
                       type=ClaimType.FACT, topics=(topic,))
         claims[claim.claim_id] = claim
@@ -551,8 +564,16 @@ def test_pages_with_different_titles_are_still_created_separately():
                                     confidence=0.95, rationale="new", model="fake"))
 
     result = plan(judgements, claims, source, _NoStore(), default_parent="pg_root")
+
     creations = [op for op in result.patch.operations if op.kind is OpKind.CREATE_PAGE]
-    assert sorted(op.payload["title"] for op in creations) == ["Attention", "Softmax"]
+    assert len(creations) == 1
+
+    # Every claim survives the fold — folding must never be a way to lose one.
+    folded = {creations[0].claim_id, *creations[0].payload["merged_claims"]}
+    assert folded == set(claims)
+    body = str(creations[0].payload["children"])
+    for topic in ("attention", "softmax", "reranking", "chunking"):
+        assert topic in body
 
 
 class _NoStore:

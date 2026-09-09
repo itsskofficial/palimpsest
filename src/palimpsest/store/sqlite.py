@@ -103,15 +103,17 @@ class SQLiteStore:
             (p["page_id"], p.get("parent_id"), p.get("parent_kind"), p.get("title", ""),
              p.get("url"), p.get("icon"), p.get("role"), p.get("summary"),
              _j(p.get("topics", [])), int(bool(p.get("archived"))),
-             p.get("created_time"), p.get("last_edited"), now, p.get("content_hash"))
+             p.get("created_time"), p.get("last_edited"), now, p.get("content_hash"),
+             p.get("cover"))
             for p in pages
         ]
         # COALESCE on role/summary/topics: a re-sync must not wipe a profile that
         # was computed by the model, since the Notion API never returns one.
         self.conn.executemany(
             "INSERT INTO pages (page_id, parent_id, parent_kind, title, url, icon, role, "
-            "summary, topics, archived, created_time, last_edited, synced_at, content_hash) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "summary, topics, archived, created_time, last_edited, synced_at, "
+            "content_hash, cover) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(page_id) DO UPDATE SET "
             "parent_id=excluded.parent_id, parent_kind=excluded.parent_kind, "
             "title=excluded.title, url=excluded.url, icon=excluded.icon, "
@@ -119,7 +121,8 @@ class SQLiteStore:
             "summary=COALESCE(excluded.summary, pages.summary), "
             "topics=CASE WHEN excluded.topics='[]' THEN pages.topics ELSE excluded.topics END, "
             "archived=excluded.archived, last_edited=excluded.last_edited, "
-            "synced_at=excluded.synced_at, content_hash=excluded.content_hash",
+            "synced_at=excluded.synced_at, content_hash=excluded.content_hash, "
+            "cover=excluded.cover",
             rows,
         )
         self.conn.commit()

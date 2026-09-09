@@ -327,6 +327,18 @@ class OpKind(str, Enum):
     page's parent, title and icon, so the undo is simply the previous value.
     """
 
+    #: Replace a contiguous run of blocks on a page with new content.
+    #:
+    #: The one operation here that is not small. It exists because a knowledge base you
+    #: actually want to read needs sections rewritten, restructured and laid out, and no
+    #: amount of sentence-level editing produces that. What it does not give up is the
+    #: property the rest of the vocabulary was protecting: the blocks it replaces are
+    #: snapshotted first, so the undo restores them exactly, in order.
+    #:
+    #: Reviewability is the real cost, and it is charged honestly — a rewrite cannot be
+    #: read as a one-line diff, so the review surface shows the before and after in full.
+    REWRITE_SECTION = "rewrite_section"
+    SET_COVER = "set_cover"
     APPEND_BLOCK = "append_block"
     UPDATE_TEXT = "update_text"
     ADD_CITATION = "add_citation"

@@ -664,6 +664,18 @@ CREATE INDEX IF NOT EXISTS embeddings_model_idx ON embeddings (model);
 """
 
 
+# --- 0006: page cover -------------------------------------------------------
+#
+# Layout is content. Once the agent may set a page's cover, "every operation is exactly
+# reversible" requires knowing what the cover was — and the mirror is the only thing that
+# remembers state from before an operation ran. Without this column the undo of "set a
+# cover" is "remove the cover", which is not the same thing on a page that already had
+# one.
+
+_COVER_PG = "ALTER TABLE pages ADD COLUMN IF NOT EXISTS cover TEXT;"
+_COVER_SQLITE = "ALTER TABLE pages ADD COLUMN cover TEXT;"
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         id="0001_init",
@@ -695,6 +707,12 @@ MIGRATIONS: list[Migration] = [
         description="cached block vectors, keyed by model and text hash",
         postgres=_EMBEDDINGS_PG + _EMBEDDINGS_RLS_PG,
         sqlite=_EMBEDDINGS_SQLITE,
+    ),
+    Migration(
+        id="0006_page_cover",
+        description="remember a page's cover, so setting one can be undone",
+        postgres=_COVER_PG,
+        sqlite=_COVER_SQLITE,
     ),
 ]
 

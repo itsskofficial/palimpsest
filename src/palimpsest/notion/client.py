@@ -328,6 +328,11 @@ class NotionClient:
     # sending the latter works today on a single-source database and breaks the moment
     # a second source is added, which is the kind of failure that surfaces months later.
 
+    def set_page_cover(self, page_id: str, url: str | None) -> dict:
+        """Set or clear a page's cover image. `None` clears it."""
+        cover = {"type": "external", "external": {"url": url}} if url else None
+        return self._request("PATCH", f"pages/{page_id}", {"cover": cover})
+
     def create_database(self, parent_page_id: str, title: str,
                         properties: dict, icon: str | None = None,
                         description: str | None = None) -> dict:

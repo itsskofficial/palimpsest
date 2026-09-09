@@ -92,6 +92,23 @@ def page_title(page: dict) -> str:
     return "Untitled"
 
 
+def _cover_url(page: dict) -> str | None:
+    """The page cover, when it is one we could set again.
+
+    Notion covers are either an uploaded file or an external URL. Only the URL can be
+    restored through the API, so an uploaded cover is remembered as `None` — and
+    `set_cover` refuses to run on such a page rather than silently replacing something
+    it could not put back.
+    """
+    cover = page.get("cover")
+    if not isinstance(cover, dict):
+        return None
+    external = cover.get("external")
+    if isinstance(external, dict) and external.get("url"):
+        return str(external["url"])
+    return None
+
+
 def _parent(page: dict) -> tuple[str | None, str | None]:
     parent = page.get("parent") or {}
     kind = parent.get("type")
@@ -225,6 +242,7 @@ def refresh_pages(client: NotionClient, store, page_ids: Iterable[str], *,
             "url": page.get("url"),
             "icon": ((page.get("icon") or {}).get("emoji")
                      if isinstance(page.get("icon"), dict) else None),
+            "cover": _cover_url(page),
             "archived": bool(page.get("in_trash") or page.get("archived")),
             "created_time": page.get("created_time"),
             "last_edited": page.get("last_edited_time") or "",
@@ -303,6 +321,7 @@ def sync(client: NotionClient, store, *, incremental: bool = True,
             "url": page.get("url"),
             "icon": ((page.get("icon") or {}).get("emoji")
                      if isinstance(page.get("icon"), dict) else None),
+            "cover": _cover_url(page),
             "archived": bool(page.get("in_trash") or page.get("archived")),
             "created_time": page.get("created_time"),
             "last_edited": last_edited,

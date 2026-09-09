@@ -142,6 +142,7 @@ layers = [
     "palimpsest.organise",
     "palimpsest.sweep",
     "palimpsest.pipeline",
+    "palimpsest.compose",
     "palimpsest.plan",
     "palimpsest.relate",
     "palimpsest.retrieve",
@@ -167,6 +168,7 @@ source_modules = [
     "palimpsest.retrieve",
     "palimpsest.relate",
     "palimpsest.plan",
+    "palimpsest.compose",
     "palimpsest.extract",
     "palimpsest.sweep",
     # `organise` proposes structural change and must not perform it. It emits a patch

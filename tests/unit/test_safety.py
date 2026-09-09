@@ -112,9 +112,16 @@ def test_no_tool_schema_can_touch_autonomy_or_apply(ctx):
         assert not leaked, f"{tool.name} exposes {leaked}"
 
 
-def test_only_two_tools_can_write_and_both_are_gated(ctx):
+def test_the_writing_tools_are_a_closed_list(ctx):
+    """Three now, not two: the agent can rewrite a whole page.
+
+    That is a much larger power than the other two and it is granted deliberately, so
+    the list is asserted rather than counted. What keeps it safe is not the tool's size
+    but `REWRITE_SECTION` snapshotting every block it replaces — see
+    `test_a_rewrite_snapshots_what_it_replaces`.
+    """
     writers = [t for t in build_registry(ctx) if t.writes]
-    assert {t.name for t in writers} == {"apply_patch", "undo_patch"}
+    assert {t.name for t in writers} == {"apply_patch", "undo_patch", "rewrite_page"}
 
 
 def test_only_the_top_level_admits_the_contradiction_tier():

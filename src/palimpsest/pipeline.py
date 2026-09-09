@@ -31,7 +31,7 @@ from palimpsest.llm import Model
 from palimpsest.plan import PlanResult, plan
 from palimpsest.relate import classify
 from palimpsest.retrieve import Index
-from palimpsest.types import Claim, Patch, Source
+from palimpsest.types import Claim, OpKind, Patch, Source
 
 __all__ = ["IngestResult", "ingest"]
 
@@ -219,6 +219,23 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
         footnotes=getattr(settings, "footnotes", True),
         default_parent=(getattr(settings, "notion_root_pages", ()) or (None,))[0],
     )
+
+    # -- 6b. lay out any page this source is about to create ------------------
+    #
+    # The planner turns each `new` claim with nowhere to go into a page holding one
+    # bullet, and folds same-titled ones together — so a source about a topic you have
+    # never written about produces a page that is a stack of fragments. Every fact is
+    # there and nobody would read it.
+    #
+    # So when a patch would create a page, the claims destined for it go to the composer,
+    # which writes it properly: an opening that says what the topic is, headings, prose,
+    # a callout where one earns its place. If the composition drops a claim, or the model
+    # is unreachable, the bullets stand. The layout is an improvement on the fallback,
+    # never a precondition for it.
+    if getattr(settings, "compose_pages", True):
+        _compose_new_pages(planned, {c.claim_id: c for c in claims}, source, model,
+                           stages, effort=getattr(settings, "classify_effort", "high"))
+
     store.put_patch(planned.patch)
     stages["plan"] = {"operations": len(planned.patch), "review": len(planned.review),
                       "skipped": len(planned.skipped)}
@@ -229,3 +246,45 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
         seconds=time.perf_counter() - started,
         usage=model.usage.as_dict(model.model),
     )
+
+
+def _compose_new_pages(planned: PlanResult, claims_by_id: dict, source: Source,
+                       model: Model | None, stages: dict, *,
+                       effort: str = "high") -> None:
+    """Replace bullet-stack page creations with a laid-out page. Never raises out.
+
+    A composition that drops a claim is discarded rather than applied: a rewrite may
+    change how a page reads, but losing a fact the user asked to keep is not a
+    stylistic choice.
+    """
+    from palimpsest import compose as composer
+
+    creations = [op for op in planned.patch.operations if op.kind is OpKind.CREATE_PAGE]
+    if not creations or model is None:
+        return
+
+    t0 = time.perf_counter()
+    laid_out = 0
+    for op in creations:
+        ids = [op.claim_id, *(op.payload.get("merged_claims") or [])]
+        claims = [claims_by_id[i] for i in ids if i in claims_by_id]
+        if len(claims) < 2:
+            # One claim is a note, not a page worth laying out; composing it would spend
+            # a model call to produce the same single sentence.
+            continue
+        try:
+            result = composer.compose_page(claims, source, model, effort=effort)
+        except Exception as e:
+            log.warning("could not compose a page for %s: %s", op.op_id, e)
+            continue
+        if not result.ok:
+            log.info("composition dropped %d claim(s); keeping the plain layout",
+                     len(result.missing))
+            continue
+        op.payload.update(children=result.children, title=result.title,
+                          icon=result.icon, summary=result.summary, composed=True)
+        laid_out += 1
+
+    if laid_out:
+        stages["compose"] = {"seconds": round(time.perf_counter() - t0, 2),
+                             "pages": laid_out}

@@ -246,6 +246,84 @@ def _reject_patch(ctx: ToolContext, patch_id: str, reason: str = "") -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _rewrite_page(ctx: ToolContext, page_id: str, instruction: str = "") -> dict:
+    """Lay a page out again, in full, as one reversible operation.
+
+    This is the largest thing the agent can propose, and it goes through exactly the
+    same door as the smallest: a patch, then `approval.gate`. What makes it safe to
+    offer is not that it is small — it is not — but that `REWRITE_SECTION` snapshots
+    every block it replaces, so the undo restores the page as it was, in order.
+
+    The current page is handed to the composer as context so the rewrite *keeps* what is
+    there. Composing from the instruction alone would produce a page about the right
+    topic that had quietly lost half its content, and every intermediate step would have
+    looked correct.
+    """
+    from palimpsest import approval
+    from palimpsest import compose as composer
+    from palimpsest.agent.context import current_chat
+    from palimpsest.types import Claim, ClaimType, Patch, Source, new_id
+
+    page = ctx.store.get_page(page_id)
+    if page is None:
+        return {"error": f"no page {page_id} in the mirror; run sync first"}
+    if not ctx.settings.has_model:
+        return {"error": "rewriting a page needs a model, and none is configured"}
+
+    blocks = [b for b in (ctx.store.get_blocks(page_id) or []) if (b.get("text") or "").strip()]
+    if not blocks:
+        return {"error": "that page has no text to rewrite"}
+
+    # The page's existing sentences become the claims, so the composer is re-laying out
+    # what is already there rather than inventing a page. The instruction rides along as
+    # the source title, which is what the composer is told it is working from.
+    claims = [
+        Claim(claim_id=new_id("clm_"), text=(b.get("text") or "").strip(),
+              type=ClaimType.FACT, topics=())
+        for b in blocks
+    ]
+    source = Source(source_id=new_id("src_"), kind="rewrite",
+                    title=instruction or f"rewrite of {page.get('title', '')}",
+                    text=composer.page_text(ctx.store, page_id))
+
+    try:
+        result = composer.compose_page(claims, source, ctx.model,
+                                       existing=source.text,
+                                       effort=ctx.settings.classify_effort)
+    except Exception as e:
+        return {"error": f"could not compose the page: {type(e).__name__}: {e}"}
+
+    if not result.ok:
+        # A rewrite that dropped a sentence is refused rather than offered. The user
+        # asked for a better page, not a shorter one, and this is the failure they would
+        # not notice until they went looking for the missing fact.
+        return {"error": f"the rewrite dropped {len(result.missing)} line(s) from the "
+                         "page, so it was discarded. Nothing was changed."}
+
+    patch = Patch(patch_id=new_id("pch_"), source_id=source.source_id, operations=[
+        composer.rewrite_page(page_id, [b["block_id"] for b in blocks],
+                              anchor_block_id=None, result=result)])
+    ctx.store.put_patch(patch)
+
+    out = approval.gate(
+        ctx.store, patch, ctx.settings,
+        notion_factory=ctx.new_notion if ctx.settings.has_notion else None,
+        journal_factory=ctx.new_journal if ctx.settings.has_notion else None,
+        chat_id=current_chat.get(), reviewer="agent",
+        summary=f"rewrite of {page.get('title', page_id)}")
+    ctx.refresh_index()
+    return {
+        "patch_id": patch.patch_id,
+        "page": page.get("title"),
+        "blocks_before": len(blocks),
+        "blocks_after": len(result.children),
+        "title": result.title,
+        **out,
+        "note": ("applied" if out.get("applied") else
+                 "not applied yet — it is waiting for the user to approve it"),
+    }
+
+
 def _remember(ctx: ToolContext, fact: str, key: str,
               kind: str = "preference") -> dict:
     ctx.store.put_memory(kind, key, fact, source="agent")
@@ -348,6 +426,15 @@ def build_registry(ctx: ToolContext) -> list[Tool]:
                 operation_ids={"type": ["array", "null"], "items": {"type": "string"},
                                "_optional": True}),
              bind(_apply_patch), group="act", writes=True),
+        Tool("rewrite_page",
+             "Lay out an entire page again: headings, prose, callouts, code — whatever "
+             "the topic needs. Use when the user asks for a page to be tidied, "
+             "restructured, made readable, or rewritten. Every existing line is kept and "
+             "re-laid-out, never dropped; a rewrite that would lose one is refused. The "
+             "whole thing is one operation and undoes in one step.",
+             _s(page_id={"type": "string"},
+                instruction={"type": "string", "_optional": True}),
+             bind(_rewrite_page), group="act", writes=True),
         Tool("undo_patch",
              "Revert a previously applied patch, exactly. Use when the user regrets a "
              "change.",

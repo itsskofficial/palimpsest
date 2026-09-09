@@ -43,6 +43,9 @@ __all__ = ["PlanResult", "plan"]
 
 log = logging.getLogger("palimpsest.plan")
 
+#: The single key every page creation in a patch folds onto — see `_merged`.
+_ONE_PAGE = "the-one-new-page"
+
 #: Roles whose pages should gain a *link* rather than prose. Appending a paragraph to a
 #: hub page is how index pages turn into essays nobody reads.
 LINK_ONLY_ROLES = frozenset({"hub"})
@@ -246,9 +249,19 @@ def _merged(ops: list[Operation], new_pages: dict[str, Operation]) -> list[Opera
     produced two Notion pages, both called "Attention". A tool whose purpose is to stop
     notes fragmenting cannot ship that.
 
-    So page creations are coalesced within the patch: the first claim creates the page,
-    later ones about the same title become bullets on it. Titles are matched
-    case-insensitively because they are derived from topic strings, which vary in case.
+    Coalescing by title fixed the obvious half and left the other half in place. A single
+    article about retrieval produced six pages — "Retrieval-Augmented Generation",
+    "Retrieval", "Reranking", "Bi-Encoder" — because each claim carried a different topic
+    string, so no two titles collided. Every page was real; four of them were one
+    sentence long. That is the same fragmentation, arrived at by a different route, and a
+    reader cannot tell the difference.
+
+    So *all* page creations in a patch fold into one. One source produces at most one new
+    page, and the claims that would have been stubs become its sections — which is a job
+    the composer is much better at than the planner, since it can see them together.
+    Claims that belong on pages you already have are unaffected: they were never
+    `CREATE_PAGE` operations in the first place.
+
     Only `CREATE_PAGE` merges — everything else already targets an existing block or page
     and has nothing to collide with.
     """
@@ -257,10 +270,10 @@ def _merged(ops: list[Operation], new_pages: dict[str, Operation]) -> list[Opera
         if op.kind is not OpKind.CREATE_PAGE:
             out.append(op)
             continue
-        key = str(op.payload.get("title", "")).strip().lower()
-        first = new_pages.get(key)
+        # One bucket, not one per title: a patch creates at most one page.
+        first = new_pages.get(_ONE_PAGE)
         if first is None:
-            new_pages[key] = op
+            new_pages[_ONE_PAGE] = op
             out.append(op)
             continue
         # Fold this claim's blocks into the page already being created. The citation

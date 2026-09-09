@@ -457,6 +457,9 @@ class Settings:
     model_api_key: str | None = None
     anthropic_api_key: str | None = None
     openrouter_api_key: str | None = None
+    #: Lay out a newly created page with the model instead of stacking bullets. On
+    #: by default: the bullet stack is a fallback, not a preference.
+    compose_pages: bool = True
     extract_effort: str = "medium"
     classify_effort: str = "high"
     max_tokens: int = 16_000
@@ -540,6 +543,7 @@ class Settings:
             model_api_key=os.environ.get("PALIMPSEST_MODEL_API_KEY") or None,
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
             openrouter_api_key=os.environ.get("OPENROUTER_API_KEY") or None,
+            compose_pages=_bool("PALIMPSEST_COMPOSE_PAGES", True),
             extract_effort=os.environ.get("PALIMPSEST_EXTRACT_EFFORT", "medium"),
             classify_effort=os.environ.get("PALIMPSEST_CLASSIFY_EFFORT", "high"),
             max_tokens=_int("PALIMPSEST_MAX_TOKENS", 16_000),

@@ -88,11 +88,16 @@ inverse, one tap to undo. Deciding stays yours.
 
 **Every edit is typed, small, and exactly reversible.** `add_citation`, `update_text`,
 `insert_footnote`, `strike_block`, `archive_block`, `create_page`, `link_pages`,
-`move_page`, `rename_page`, `set_icon` — that is the complete list. There is no
-`rewrite_page`, because an operation you cannot render as a diff is one you cannot
-review, and **there is no delete**: the Notion client has no `DELETE` verb at all.
-The most destructive thing in the vocabulary is a strike-through, which leaves the
-words on the page.
+`move_page`, `rename_page`, `set_icon`, `set_cover`, `rewrite_section`. **There is no
+delete**: the Notion client has no `DELETE` verb at all, and the most destructive thing
+in the vocabulary is a strike-through, which leaves the words on the page.
+
+`rewrite_section` is the one that is not small. It replaces a run of blocks wholesale —
+headings, prose, callouts, code, images, columns — because a knowledge base worth reading
+needs sections restructured, and no amount of sentence-level editing produces that. It
+gives up reviewability-at-a-glance and keeps recoverability: the blocks it replaces are
+snapshotted first, so undo restores them exactly, in order. Those are two properties, not
+one, and only the first is traded away.
 
 ---
 
@@ -299,6 +304,32 @@ palimpsest eval component    # per-relation precision & recall against that gold
 The golden set is a **test set, not training data** — nothing is fine-tuned. It grows
 for free from every approval you make, and it is the number the autonomy ladder is meant
 to rest on rather than being set by hand.
+
+## It writes the page, not a list
+
+Feed it a document about something you have never written about and it does not append
+eleven bullets in arrival order. The claims go to a composer that lays out a page: an
+opening that says what the topic *is*, `heading_2`s that follow the shape of the material,
+prose rather than fragments, a callout for the thing that would otherwise be missed, code
+where code is clearer than a sentence.
+
+One source produces at most one new page. An earlier version folded page creations by
+title, which fixed the obvious duplication and left a subtler one — a single article about
+retrieval produced six pages, four of them one sentence long, because every claim carried
+a different topic string so no two titles ever collided. Same fragmentation, different
+route, and a reader cannot tell the difference.
+
+Two things are checked before a composition is used, because "lay this out nicely" is a
+short step from "quietly drop the boring half":
+
+- **Every claim must survive.** The layout is verified against the claims that went in,
+  and one that dropped any is discarded — the bullets stand instead. A rewrite may change
+  how a page reads; it may not lose a fact.
+- **The old version is kept.** Composition rides on `rewrite_section`, so the page before
+  is snapshotted and one tap puts it back.
+
+Ask the agent to tidy a page and it uses the same machinery — `rewrite_page` is a tool it
+has, gated exactly like the smallest citation.
 
 ## Any model, including none of them
 
