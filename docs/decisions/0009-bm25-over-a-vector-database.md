@@ -83,4 +83,12 @@ pure Python. The operational cost this ADR refused — a second datastore to run
 and keep consistent with the mirror — is still refused.
 
 The eval measures the gap rather than asserting it: two fixture cases are unreachable
-lexically, scoring 0% with no embedder and 100% with one.
+lexically, scoring 0% with no embedder and 100% with one — measured with
+`mxbai-embed-large` served by a local Ollama, which also lifts mean reciprocal rank on
+the other fourteen cases from 0.96 to 1.00.
+
+That local result changes the shape of the decision. This ADR weighed vectors against a
+per-call bill and a second service to operate; a model running on the machine that is
+already running the app has neither. The remaining cost is the one still refused: a
+vector *database*. Cosine over a few thousand float32 blobs in the existing SQLite table
+is milliseconds of pure Python, and the cache means each block is embedded once.

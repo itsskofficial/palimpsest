@@ -458,7 +458,20 @@ def cmd_status(args) -> int:
     print("\nstore")
     print(f"  {store.stats().summary()}")
     print(f"  migrations  {store.applied_migrations()}")
-    problems = settings.problems()
+    # Two sources: things wrong with the configuration itself, and things wrong
+    # with the pairing of *this model* with *this autonomy level*. The second needs
+    # the store, because the answer is a measurement rather than a setting.
+    from palimpsest.config import autonomy_warnings, model_quality
+
+    problems = settings.problems() + autonomy_warnings(store, settings)
+
+    run = model_quality(store, settings)
+    if run is not None:
+        scores = run.get("scores") or {}
+        verdict = "PASS" if run.get("passed") else "FAIL"
+        print("\nmodel quality (component eval)  "
+              f"{verdict}  weighted_f1={scores.get('weighted_f1', '?')} "
+              f"contradiction_recall={scores.get('contradiction_recall', '?')}")
     print("\nchecks")
     for p in problems:
         print(f"  ! {p}")

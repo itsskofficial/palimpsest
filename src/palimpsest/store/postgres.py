@@ -666,6 +666,18 @@ class PostgresStore:
                  run.get("created_at", time.time())))
         return run["run_id"]
 
+    def last_eval_run(self, suite: str, model: str) -> dict | None:
+        """See the SQLite implementation."""
+        with self._cur() as cur:
+            cur.execute("SELECT * FROM eval_runs WHERE suite=%s AND model=%s "
+                        "ORDER BY created_at DESC LIMIT 1", (suite, model))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["passed"] = bool(out.get("passed"))
+        return out
+
     def get_eval_runs(self, suite: str | None = None, limit: int = 20) -> list[dict]:
         sql = "SELECT * FROM eval_runs"
         params: list[Any] = []

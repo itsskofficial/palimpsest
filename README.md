@@ -296,6 +296,48 @@ The golden set is a **test set, not training data** — nothing is fine-tuned. I
 for free from every approval you make, and it is the number the autonomy ladder is meant
 to rest on rather than being set by hand.
 
+## Any model, including none of them
+
+The model is configuration, not code. `PALIMPSEST_MODEL_BASE_URL` points at anything
+speaking the OpenAI API; otherwise the provider is inferred from whichever key is set.
+Set `PALIMPSEST_MODEL_PROVIDER=ollama` and it runs entirely on your machine — no key, no
+cost, nothing leaving the computer, and free embeddings from the same runtime.
+
+That freedom has a price, and the eval is how you see it rather than discover it. Every
+model below classified the same twenty labelled cases from the workspace committed at
+`src/palimpsest/evals/data/workspace.json`:
+
+| model | weighted F1 | contradiction recall | |
+|---|---|---|---|
+| `anthropic/claude-sonnet-5` | **0.95** | 1.00 | PASS |
+| `ollama/qwen3:8b` | 0.65 | 0.67 | fail |
+| `groq/openai/gpt-oss-120b` | 0.59 | 0.67 | fail |
+| `ollama/qwen2.5:7b` | 0.42 | 0.33 | fail |
+| `ollama/llama3.1:8b` | 0.27 | 0.00 | fail |
+
+Contradiction recall is the column to read. A model that misses two contradictions in
+three is not a model to hand write access to, whatever its headline number, which is why
+that metric is weighted 3× and checked on its own.
+
+So `palimpsest status` refuses to be quiet about it: give write access to a model that
+has never been measured, or one that failed, and it says so and names the command.
+
+```bash
+palimpsest eval component     # how does *your* model classify?
+palimpsest eval retrieval     # can it find the right page? needs no model at all
+```
+
+**Embeddings are the opposite story.** Local ones are excellent and cost nothing. On the
+same fixture, `mxbai-embed-large` through Ollama takes the two cases that share no
+vocabulary at all with their answer — you wrote "the CKA/RSA stuff", the source says
+"representational similarity analysis" — from **0% to 100%**, and lifts mean reciprocal
+rank on everything else from 0.96 to 1.00. Vectors are cached in the store by block, text
+hash and model, so each block is embedded once and an edited one re-embeds by itself.
+
+The honest recommendation, then, is mixed: a good hosted model for the judgement, local
+embeddings for the search. Fully local works, and the product will tell you what you gave
+up for it.
+
 ## The app
 
 The window is the product. Three tabs, and the first one is the whole loop.
@@ -382,8 +424,9 @@ Nothing is required to *look*; two keys are required to be useful. See
 | Variable | Needed for |
 |---|---|
 | `NOTION_TOKEN` | everything that touches Notion |
-| `PALIMPSEST_MODEL_BASE_URL` + `PALIMPSEST_MODEL` | any OpenAI-compatible endpoint — Groq, OpenRouter, a local Ollama. Otherwise the provider is inferred from whichever key is set |
-| `PALIMPSEST_EMBED_BASE_URL` / `OPENAI_API_KEY` | optional vectors. Without them retrieval is BM25, which is the floor the product is designed around |
+| `PALIMPSEST_MODEL_PROVIDER` | `anthropic`, `openai`, `groq`, `openrouter`, … or `ollama` to run on this machine with no key |
+| `PALIMPSEST_MODEL_BASE_URL` + `PALIMPSEST_MODEL` | anything else that speaks the OpenAI API, including LM Studio and vLLM |
+| `PALIMPSEST_EMBED_PROVIDER` / `OPENAI_API_KEY` | optional vectors. `ollama` gives you them free; without any, retrieval is BM25, which is the floor the product is designed around |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_CHATS` | the bot. The allowlist is not optional |
 | `ANTHROPIC_API_KEY` | extraction, classification, contradiction sweep |
 | `DEEPGRAM_API_KEY` / `GROQ_API_KEY` / `SARVAM_API_KEY` | audio. Any one. **No offline fallback** — a recording fails rather than becoming an empty source |

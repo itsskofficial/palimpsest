@@ -647,6 +647,23 @@ class SQLiteStore:
         self.conn.commit()
         return run["run_id"]
 
+    def last_eval_run(self, suite: str, model: str) -> dict | None:
+        """The most recent run of one suite against one model, or None if never run.
+
+        Exact match on the model string, deliberately. A score earned by
+        `anthropic/claude-opus-5` says nothing about `ollama/qwen2.5:7b`, and a fuzzy
+        match here would be a way to inherit somebody else's number.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM eval_runs WHERE suite=? AND model=? "
+            "ORDER BY created_at DESC LIMIT 1", (suite, model)).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["scores"] = _uj(out.get("scores"), {})
+        out["passed"] = bool(out.get("passed"))
+        return out
+
     def get_eval_runs(self, suite: str | None = None, limit: int = 20) -> list[dict]:
         sql = "SELECT * FROM eval_runs"
         params: list[Any] = []

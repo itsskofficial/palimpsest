@@ -113,6 +113,15 @@ export type Approval = {
 
 // -- endpoints ---------------------------------------------------------------
 
+export type LocalRuntime = {
+  provider: string;
+  base_url: string;
+  models: string[];
+  embedding_models: string[];
+  suggested_model: string;
+  suggested_embedding: string;
+};
+
 export type ActivityEntry = {
   patch_id: string;
   status: string;
@@ -182,6 +191,8 @@ export const api = {
       "/v1/agent",
       { message, session_id: sessionId },
     ),
+
+  localRuntimes: () => request<{ runtimes: LocalRuntime[] }>("/v1/setup/local"),
 
   activity: (limit = 60) =>
     request<{ activity: ActivityEntry[] }>(`/v1/activity?limit=${limit}`),

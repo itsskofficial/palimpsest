@@ -29,9 +29,22 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-__all__ = ["EMBED_PROVIDERS", "MODEL_PROVIDERS", "ModelSetup", "Settings",
-           "config_path", "describe_embedding", "describe_setup", "load",
-           "load_env_file", "model_getter", "redact"]
+__all__ = [
+    "EMBED_PROVIDERS",
+    "LOCAL_RUNTIMES",
+    "MODEL_PROVIDERS",
+    "ModelSetup",
+    "Settings",
+    "autonomy_warnings",
+    "config_path",
+    "describe_embedding",
+    "describe_setup",
+    "load",
+    "load_env_file",
+    "model_getter",
+    "model_quality",
+    "redact",
+]
 
 
 def config_path() -> Path:
@@ -145,6 +158,24 @@ MODEL_PROVIDERS: dict[str, tuple[str, str, str]] = {
 }
 
 
+#: Runtimes that serve the OpenAI API from your own machine, needing no key at all.
+#:
+#: Kept apart from `MODEL_PROVIDERS` because those are *discovered* by finding a key in
+#: the environment, and a keyless provider cannot be discovered that way. Pointing at
+#: localhost on a hunch would also be a surprising thing to do silently, so these are
+#: reached only by naming one: `PALIMPSEST_MODEL_PROVIDER=ollama`.
+#:
+#: The tuple is (base URL, default chat model, default embedding model). Only Ollama gets
+#: defaults, because it is the one with a fixed model naming scheme and a registry; the
+#: others serve whatever you happened to load, so they require a model name.
+LOCAL_RUNTIMES: dict[str, tuple[str, str, str]] = {
+    "ollama": ("http://127.0.0.1:11434/v1", "qwen2.5:7b", "mxbai-embed-large"),
+    "lmstudio": ("http://127.0.0.1:1234/v1", "", ""),
+    "llamacpp": ("http://127.0.0.1:8080/v1", "", ""),
+    "vllm": ("http://127.0.0.1:8000/v1", "", ""),
+}
+
+
 #: Hosts that serve OpenAI-shaped embeddings, and a sensible model for each. Groq is
 #: deliberately absent: it serves no embeddings endpoint, so someone whose only key is a
 #: Groq one gets lexical retrieval and is told why rather than a string of 404s.
@@ -195,6 +226,7 @@ def describe_embedding(settings=None):
         "PALIMPSEST_EMBED_MODEL": getattr(settings, "embed_model", "") or "",
         "PALIMPSEST_EMBED_BASE_URL": getattr(settings, "embed_base_url", "") or "",
         "PALIMPSEST_EMBED_API_KEY": getattr(settings, "embed_api_key", "") or "",
+        "PALIMPSEST_EMBED_PROVIDER": getattr(settings, "embed_provider", "") or "",
     }
 
     def value(key: str) -> str:
@@ -204,6 +236,18 @@ def describe_embedding(settings=None):
 
     model = value("PALIMPSEST_EMBED_MODEL")
     base = value("PALIMPSEST_EMBED_BASE_URL")
+
+    named = (value("PALIMPSEST_EMBED_PROVIDER")
+             or value("PALIMPSEST_MODEL_PROVIDER")).strip().lower()
+    if not base and named in LOCAL_RUNTIMES:
+        # A local runtime already serving the chat model is the obvious place to ask for
+        # vectors too, so choosing one for chat opts you into both — and this is the only
+        # configuration where embeddings cost nothing, which is the whole reason to make
+        # it easy to fall into.
+        url, _, default_embed = LOCAL_RUNTIMES[named]
+        chosen = model if model != "text-embedding-3-small" else default_embed
+        return ModelSetup(named, chosen, url, f"local runtime {named}") if chosen else None
+
     if base:
         if not model:
             return None
@@ -229,6 +273,12 @@ def describe_setup(settings: Any = None) -> ModelSetup | None:
                           "PALIMPSEST_MODEL_BASE_URL is set")
 
     named = (get("PALIMPSEST_MODEL_PROVIDER") or "").strip().lower()
+    if named in LOCAL_RUNTIMES:
+        url, default, _ = LOCAL_RUNTIMES[named]
+        model = get("PALIMPSEST_MODEL") or default
+        if not model:
+            return None
+        return ModelSetup(named, model, url, f"PALIMPSEST_MODEL_PROVIDER={named}")
     if named == "anthropic":
         return ModelSetup("anthropic", get("PALIMPSEST_MODEL") or "claude-opus-5", None,
                           "PALIMPSEST_MODEL_PROVIDER=anthropic")
@@ -245,6 +295,75 @@ def describe_setup(settings: Any = None) -> ModelSetup | None:
             return ModelSetup(name, get("PALIMPSEST_MODEL") or default, url,
                               f"{env} is set")
     return None
+
+
+#: Autonomy levels that write something without a person reading it first. Below these,
+#: an unmeasured model costs you a review; at or above them it costs you an edit.
+WRITING_LEVELS = frozenset({"low", "medium", "full", "everything"})
+
+
+def model_quality(store, settings) -> dict | None:
+    """The last component-eval result for the model this configuration would use.
+
+    Returns None when the model has never been measured, which is a different answer
+    from "measured and bad" and is reported differently. Never raises: a store that
+    cannot answer must not stop `status` from printing.
+    """
+    setup = describe_setup(settings)
+    if setup is None:
+        return None
+    name = f"{setup.provider}/{setup.model}"
+    try:
+        return store.last_eval_run("component", name)
+    except Exception:  # pragma: no cover - a status line is not worth an exception
+        return None
+
+
+def autonomy_warnings(store, settings) -> list[str]:
+    """Problems that only exist because of *which model* is doing the deciding.
+
+    The provider-invariance work made every model runnable. That is the feature, and it
+    is also the risk: a 7B model on a laptop and Claude Opus are the same three lines of
+    configuration apart, and they classify very differently. Measured on the committed
+    fixture, the best local 8B model scores 0.65 weighted F1 with contradiction recall
+    0.67, against 0.95 and 1.00 for a frontier model — so "it can write to my notes on
+    its own" means something quite different depending on an answer nobody is prompted
+    for.
+
+    So the warning is not "local models are bad". It is: you have given write access to
+    a model whose accuracy on *your* fixture is unknown or known to be below the bar, and
+    here is the one command that answers it.
+    """
+    out: list[str] = []
+    if not settings.apply or settings.autonomy not in WRITING_LEVELS:
+        return out
+
+    setup = describe_setup(settings)
+    if setup is None:
+        return out
+
+    run = model_quality(store, settings)
+    name = f"{setup.provider}/{setup.model}"
+    if run is None:
+        out.append(
+            f"{name} has write access but has never been measured — run "
+            f"`palimpsest eval component` to see how it classifies before trusting it")
+        return out
+
+    if not run.get("passed"):
+        scores = run.get("scores") or {}
+        headline = scores.get("weighted_f1")
+        recall = scores.get("contradiction_recall")
+        detail = []
+        if headline is not None:
+            detail.append(f"weighted F1 {headline:.2f}")
+        if recall is not None:
+            detail.append(f"contradiction recall {recall:.2f}")
+        out.append(
+            f"{name} has write access but failed the classifier eval"
+            + (f" ({', '.join(detail)})" if detail else "")
+            + " — consider a stronger model, or a lower autonomy level")
+    return out
 
 
 def redact(value: Any, key: str = "") -> Any:
@@ -350,6 +469,7 @@ class Settings:
     embed_model: str = "text-embedding-3-small"
     embed_base_url: str | None = None
     embed_api_key: str | None = None
+    embed_provider: str | None = None
     #: Speech to text. Whichever key is set is used, in this order, unless
     #: `PALIMPSEST_TRANSCRIBE` names one. There is no offline fallback on purpose: a
     #: transcript you did not get is not a source.
@@ -427,6 +547,7 @@ class Settings:
             openai_api_key=os.environ.get("OPENAI_API_KEY") or None,
             embed_model=os.environ.get("PALIMPSEST_EMBED_MODEL", "text-embedding-3-small"),
             embed_base_url=os.environ.get("PALIMPSEST_EMBED_BASE_URL") or None,
+            embed_provider=os.environ.get("PALIMPSEST_EMBED_PROVIDER") or None,
             embed_api_key=os.environ.get("PALIMPSEST_EMBED_API_KEY") or None,
             deepgram_api_key=os.environ.get("DEEPGRAM_API_KEY") or None,
             groq_api_key=os.environ.get("GROQ_API_KEY") or None,
@@ -493,6 +614,7 @@ class Settings:
         pairs = {
             "PALIMPSEST_MODEL": self.model,
             "PALIMPSEST_MODEL_PROVIDER": self.model_provider,
+            "PALIMPSEST_EMBED_PROVIDER": self.embed_provider,
             "PALIMPSEST_MODEL_BASE_URL": self.model_base_url,
             "PALIMPSEST_MODEL_API_KEY": self.model_api_key,
             "ANTHROPIC_API_KEY": self.anthropic_api_key,
@@ -672,8 +794,12 @@ class Settings:
             out.append(f"PALIMPSEST_TRANSCRIBE={self.transcribe_provider} but its key is "
                        "not set — recordings will fail rather than fall back")
         if self.apply and self.autonomy != "none":
-            out.append(f"apply=on and autonomy={self.autonomy}: {self.autonomy}-risk relations "
-                       "will be written to Notion without review (contradictions never are)")
+            tiers = ", ".join(sorted(AUTONOMY_LEVELS[self.autonomy]))
+            tail = ("contradictions are recorded beside the line they argue with, never "
+                    "resolved" if self.autonomy == "everything"
+                    else "contradictions still wait for you")
+            out.append(f"apply=on and autonomy={self.autonomy}: {tiers}-risk relations "
+                       f"are written to Notion without review — {tail}")
         if self.artifact_url.startswith("file://") and self.environment != "local":
             out.append(f"archive goes to a local path but PALIMPSEST_ENV={self.environment}; "
                        "a container filesystem does not survive a redeploy — use s3:// or "

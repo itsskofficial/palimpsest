@@ -49,6 +49,7 @@ WRITABLE = {
     "PALIMPSEST_MODEL", "PALIMPSEST_MODEL_PROVIDER", "PALIMPSEST_MODEL_BASE_URL",
     "PALIMPSEST_MODEL_API_KEY",
     "PALIMPSEST_EMBED_MODEL", "PALIMPSEST_EMBED_BASE_URL", "PALIMPSEST_EMBED_API_KEY",
+    "PALIMPSEST_EMBED_PROVIDER",
 }
 
 #: How often the event stream looks for changes. Fast enough that a capture feels live,
@@ -91,6 +92,47 @@ def register(app, st) -> None:
             "apply": s.apply,
             "autonomy": s.autonomy,
         }
+
+    @app.get("/v1/setup/local", tags=["setup"])
+    def setup_local():
+        """Which local model runtimes are actually running, and what they have loaded.
+
+        Probing here rather than in `config.describe_setup`: resolution must stay a pure
+        function of the settings, and quietly pointing at localhost because something
+        answered would be a surprising thing for it to do. The wizard, on the other hand,
+        genuinely wants to know — offering "use the models already on this machine" is
+        only helpful if it can say which ones, and only honest if it checked.
+        """
+        import json as jsonlib
+        import urllib.error
+        import urllib.request
+
+        from palimpsest.config import LOCAL_RUNTIMES
+
+        found = []
+        for name, (base, chat, embed_model) in LOCAL_RUNTIMES.items():
+            try:
+                request = urllib.request.Request(f"{base}/models")
+                with urllib.request.urlopen(request, timeout=1.5) as response:
+                    body = jsonlib.loads(response.read().decode("utf-8"))
+            except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+                continue
+            ids = [m.get("id") for m in (body.get("data") or []) if m.get("id")]
+            # Ollama reports embedding models alongside chat ones with no flag to tell
+            # them apart, so the split is by name. Wrong guesses are recoverable — the
+            # wizard shows both lists and the user picks.
+            embeds = [i for i in ids if "embed" in i.lower()]
+            found.append({
+                "provider": name,
+                "base_url": base,
+                "models": [i for i in ids if i not in embeds],
+                "embedding_models": embeds,
+                "suggested_model": chat if chat in ids else next(
+                    (i for i in ids if i not in embeds), ""),
+                "suggested_embedding": embed_model if embed_model in ids else (
+                    embeds[0] if embeds else ""),
+            })
+        return {"runtimes": found}
 
     @app.post("/v1/setup/validate", tags=["setup"])
     def setup_validate(payload: dict = Body(...)):

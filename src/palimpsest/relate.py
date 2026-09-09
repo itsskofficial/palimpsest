@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from palimpsest.llm import Model, ModelError
 from palimpsest.retrieve import Candidate, Index, PageHit, tokenize
@@ -165,6 +166,31 @@ def _jaccard(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+def _confidence(raw: Any) -> float:
+    """Read a confidence, whatever scale the model chose to answer on.
+
+    The schema says `number` and the prompt means 0-1, and plenty of models answer `80`.
+    Clamping that to the range gave 1.0 — so a model saying "80% sure", or "50% sure",
+    was recorded as *certain* and sailed past the confidence floor that is the last thing
+    standing between a doubtful judgement and someone's notes. The failure only appears
+    on models that were not used during development, which is exactly the population the
+    provider-invariance work invited in.
+
+    Anything above 1 is therefore read as a percentage. Nothing legitimate lands between
+    1 and 100 on a 0-1 scale, so the interpretation is unambiguous; garbage becomes 0.0,
+    which routes to review rather than to Notion.
+    """
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value or value in (float("inf"), float("-inf")):  # NaN, inf
+        return 0.0
+    if value > 1.0:
+        value = value / 100.0
+    return max(0.0, min(1.0, value))
+
+
 def _shortcut(claim: Claim, candidates: list[Candidate], pages: list[PageHit],
               ) -> Judgement | None:
     """Decide without the model where the answer is not in doubt.
@@ -275,7 +301,7 @@ def classify_one(claim: Claim, source: Source, index: Index, model: Model, *,
     judgement = Judgement(
         claim_id=claim.claim_id,
         relation=relation,
-        confidence=max(0.0, min(1.0, float(payload.get("confidence", 0.0)))),
+        confidence=_confidence(payload.get("confidence")),
         target_page_id=payload.get("target_page_id") or None,
         target_block_id=payload.get("target_block_id") or None,
         existing_text=payload.get("existing_text") or None,

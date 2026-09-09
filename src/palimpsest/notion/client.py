@@ -250,11 +250,18 @@ class NotionClient:
         Called `archive` here and never `delete`, because that is what it is: Notion
         keeps the block and it is restorable from the UI. palimpsest never issues the
         hard DELETE.
+
+        `in_trash`, not `archived`. Blocks were fixed here a release after pages were,
+        and the first fix carried a comment claiming blocks had kept the old name —
+        which was a guess, and wrong. The failure mode is narrow enough to hide: only
+        undoing an operation that *created* blocks touches this call, so ordinary use
+        and most reverts look fine while `undo` of an append fails with a validation
+        error about a field nobody sent on purpose.
         """
-        return self._request("PATCH", f"blocks/{block_id}", {"archived": True})
+        return self._request("PATCH", f"blocks/{block_id}", {"in_trash": True})
 
     def restore_block(self, block_id: str) -> dict:
-        return self._request("PATCH", f"blocks/{block_id}", {"archived": False})
+        return self._request("PATCH", f"blocks/{block_id}", {"in_trash": False})
 
     def create_page(self, parent_page_id: str, title: str,
                     children: list[dict] | None = None,
@@ -274,10 +281,10 @@ class NotionClient:
     def archive_page(self, page_id: str, *, restore: bool = False) -> dict:
         """Move a page to the trash, or bring it back.
 
-        `in_trash`, not `archived`. The 2025-09-03 API renamed the field on *pages* and
-        now rejects the old name outright — `body.archived should be not present`. Blocks
-        kept `archived`, which is why the two calls differ and why this is easy to get
-        wrong in only one of them.
+        `in_trash`, not `archived`. The 2025-09-03 API renamed the field and now rejects
+        the old name outright — `body.archived should be not present`. Blocks moved the
+        same way a release later; both calls were verified against the live API rather
+        than assumed, after assuming it once got this wrong.
 
         The symptom was specific: undoing a capture that created a page failed, so the
         one operation people are most likely to want to reverse was the one that could

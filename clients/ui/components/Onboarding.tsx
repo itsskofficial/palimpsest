@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, type LocalRuntime } from "@/lib/api";
 
 /**
  * First run, in the app.
@@ -208,6 +208,14 @@ const PROVIDERS: {
     placeholder: "gsk_…",
     keyName: "GROQ_API_KEY",
   },
+  {
+    id: "ollama",
+    label: "On this machine",
+    where: "ollama.com, then: ollama pull qwen2.5:7b",
+    hint: "No key, no cost, nothing leaves your computer. It also gives you free embeddings, which is what finds a page you worded completely differently. Small models classify noticeably worse, so measure yours with palimpsest eval component before giving it autonomy.",
+    placeholder: "",
+    keyName: "",
+  },
 ];
 
 function ClaudeStep({ onNext }: { onNext: () => void }) {
@@ -215,8 +223,51 @@ function ClaudeStep({ onNext }: { onNext: () => void }) {
   const [token, setToken] = useState("");
   const [state, setState] = useState<"idle" | "busy" | "ok" | "err">("idle");
   const [msg, setMsg] = useState("");
+  const [local, setLocal] = useState<LocalRuntime | null>(null);
+  const [localModel, setLocalModel] = useState("");
+
+  // Asked once, up front, so the local option can say *which* models are already here
+  // rather than telling you to go and find out. A machine running nothing simply never
+  // shows the list, and the option explains what to install.
+  useEffect(() => {
+    api
+      .localRuntimes()
+      .then((r) => {
+        const first = r.runtimes[0];
+        if (!first) return;
+        setLocal(first);
+        setLocalModel(first.suggested_model);
+      })
+      .catch(() => {});
+  }, []);
+
+  const isLocal = provider.id === "ollama";
 
   const submit = async () => {
+    if (isLocal) {
+      if (!localModel) return;
+      setState("busy");
+      try {
+        await api.saveSettings({
+          PALIMPSEST_MODEL_PROVIDER: "ollama",
+          PALIMPSEST_MODEL: localModel,
+          // Vectors from the same runtime. This is the only configuration where they
+          // cost nothing, so it would be perverse to make it a second decision.
+          ...(local?.suggested_embedding
+            ? {
+                PALIMPSEST_EMBED_PROVIDER: "ollama",
+                PALIMPSEST_EMBED_MODEL: local.suggested_embedding,
+              }
+            : {}),
+        });
+        setState("ok");
+        setTimeout(onNext, 500);
+      } catch (e) {
+        setState("err");
+        setMsg(e instanceof ApiError ? e.message : "Could not save");
+      }
+      return;
+    }
     if (!token.trim()) return;
     setState("busy");
     try {
@@ -271,15 +322,57 @@ function ClaudeStep({ onNext }: { onNext: () => void }) {
       <p className="mt-1 text-[13px] text-faint">Get a key at {provider.where}</p>
 
       <div className="mt-3 space-y-3">
-        <Field
-          value={token}
-          onChange={setToken}
-          placeholder={provider.placeholder}
-          onEnter={submit}
-        />
+        {isLocal ? (
+          local ? (
+            <div className="space-y-2">
+              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-verdigris">
+                {local.provider} is running here
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {local.models.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setLocalModel(m)}
+                    className={`rounded-lg border px-3 py-1.5 font-mono text-[12px] transition ${
+                      localModel === m
+                        ? "border-sepia bg-sepia/10 text-ink"
+                        : "border-rule text-soft hover:border-sepia/50"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              {local.suggested_embedding && (
+                <p className="text-[12.5px] text-soft">
+                  Vectors from{" "}
+                  <span className="font-mono text-sepia">
+                    {local.suggested_embedding}
+                  </span>{" "}
+                  as well.
+                </p>
+              )}
+            </div>
+          ) : (
+            <Note kind="err">
+              Nothing is serving models on this machine yet. Install Ollama, then run
+              ollama pull qwen2.5:7b and ollama pull mxbai-embed-large.
+            </Note>
+          )
+        ) : (
+          <Field
+            value={token}
+            onChange={setToken}
+            placeholder={provider.placeholder}
+            onEnter={submit}
+          />
+        )}
         {state === "err" && <Note kind="err">{msg}</Note>}
         {state === "ok" && <Note kind="ok">Saved</Note>}
-        <Primary onClick={submit} disabled={state === "busy" || !token.trim()}>
+        <Primary
+          onClick={submit}
+          disabled={state === "busy" || (isLocal ? !localModel : !token.trim())}
+        >
           {state === "busy" ? "Checking…" : "Continue"}
         </Primary>
         <p className="text-[12px] text-faint">
