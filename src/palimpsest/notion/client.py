@@ -271,8 +271,20 @@ class NotionClient:
             body["icon"] = {"type": "emoji", "emoji": icon}
         return self._request("POST", "pages", body)
 
-    def archive_page(self, page_id: str) -> dict:
-        return self._request("PATCH", f"pages/{page_id}", {"archived": True})
+    def archive_page(self, page_id: str, *, restore: bool = False) -> dict:
+        """Move a page to the trash, or bring it back.
+
+        `in_trash`, not `archived`. The 2025-09-03 API renamed the field on *pages* and
+        now rejects the old name outright — `body.archived should be not present`. Blocks
+        kept `archived`, which is why the two calls differ and why this is easy to get
+        wrong in only one of them.
+
+        The symptom was specific: undoing a capture that created a page failed, so the
+        one operation people are most likely to want to reverse was the one that could
+        not be. Everything else in the ledger reverted fine, which made it look like a
+        Notion outage rather than a field name.
+        """
+        return self._request("PATCH", f"pages/{page_id}", {"in_trash": not restore})
 
     def update_page(self, page_id: str, payload: dict) -> dict:
         """Patch a page's own attributes — title, icon, cover.

@@ -291,6 +291,73 @@ def register(app, st) -> None:
         st.refresh_index()
         return result
 
+    # -- activity and undo ----------------------------------------------------
+
+    @app.get("/v1/activity", tags=["activity"])
+    def activity(limit: int = Query(default=60, ge=1, le=300)):
+        """Everything that has happened, newest first, with what can still be undone.
+
+        One list rather than three. A patch that applied automatically, a patch you
+        approved, and a patch you rejected are the same event from the reader's side —
+        "something was proposed and this is what became of it" — and splitting them by
+        which door they came through makes the history unreadable exactly when you are
+        trying to find the change that broke something.
+        """
+        rows: list[dict] = []
+        for patch_row in st.store.list_patches(limit=limit):
+            patch = st.store.get_patch(patch_row["patch_id"])
+            if patch is None:
+                continue
+            source = _source_of(st.store, patch)
+            applied = [op for op in patch.operations if op.applied_at]
+            reverted = [op for op in applied if getattr(op, "reverted_at", None)]
+            rows.append({
+                "patch_id": patch.patch_id,
+                "status": patch_row["status"],
+                "at": patch_row.get("applied_at") or patch_row.get("created_at"),
+                "reviewer": patch_row.get("reviewer"),
+                "source": source,
+                "operations": len(patch.operations),
+                "applied": len(applied),
+                # Undoable means: it reached Notion, and it has not already been taken
+                # back. A rejected or still-pending patch has nothing to undo.
+                "undoable": bool(applied) and len(reverted) < len(applied),
+                "reverted": bool(reverted),
+                "relations": sorted({op.relation.value for op in patch.operations
+                                     if op.relation}),
+                "pages": sorted({p for p in (_page_name(st.store, op) for op in
+                                             patch.operations) if p}),
+            })
+        return {"activity": rows}
+
+    @app.post("/v1/patches/{patch_id}/undo", tags=["activity"])
+    def undo_patch(patch_id: str):
+        """Take back an applied patch, exactly.
+
+        Every operation carries its own inverse, computed before it ran, so this is a
+        real reversal rather than a compensating guess. It is the reason the autonomy
+        ladder can go as far as it does: the answer to "it did something I did not want"
+        is one button, not a manual repair.
+        """
+        from palimpsest.notion.apply import revert_patch
+
+        patch = st.store.get_patch(patch_id)
+        if patch is None:
+            raise HTTPException(404, f"no patch {patch_id}")
+        if not st.settings.has_notion:
+            raise HTTPException(400, "NOTION_TOKEN is not set, so nothing can be undone")
+        if not any(op.applied_at for op in patch.operations):
+            raise HTTPException(409, "that patch was never applied, so there is nothing "
+                                     "to undo")
+
+        result = revert_patch(st.notion, st.store, patch, reviewer="ui",
+                              journal=st.journal if st.settings.journal else None)
+        st.refresh_index()
+        payload = result.as_dict() if hasattr(result, "as_dict") else {}
+        if result.failed:
+            raise HTTPException(409, f"undo did not complete: {payload.get('errors')}")
+        return {"ok": True, "patch_id": patch_id, **payload}
+
     # -- the agent ------------------------------------------------------------
 
     @app.post("/v1/agent", tags=["agent"])
@@ -379,6 +446,19 @@ def _job_event(job: dict) -> dict:
         "approval_id": applied.get("approval_id"),
         "error": job.get("error"),
     }
+
+
+def _page_name(store, op) -> str | None:
+    """A human name for whatever an operation touched, for the activity list."""
+    title = (op.payload or {}).get("title")
+    if title:
+        return str(title)
+    page_id = (op.result or {}).get("page_id")
+    if not page_id:
+        block = store.get_block(op.target)
+        page_id = (block or {}).get("page_id") or op.target
+    page = store.get_page(page_id) if page_id else None
+    return (page or {}).get("title") or None
 
 
 def _source_of(store, patch) -> dict:

@@ -113,6 +113,20 @@ export type Approval = {
 
 // -- endpoints ---------------------------------------------------------------
 
+export type ActivityEntry = {
+  patch_id: string;
+  status: string;
+  at: number | null;
+  reviewer: string | null;
+  source: { title?: string; kind?: string; url?: string } | null;
+  operations: number;
+  applied: number;
+  undoable: boolean;
+  reverted: boolean;
+  relations: string[];
+  pages: string[];
+};
+
 export const api = {
   status: () => request<any>("/v1/status"),
   setupState: () => request<SetupState>("/v1/setup/state"),
@@ -168,6 +182,10 @@ export const api = {
       "/v1/agent",
       { message, session_id: sessionId },
     ),
+
+  activity: (limit = 60) =>
+    request<{ activity: ActivityEntry[] }>(`/v1/activity?limit=${limit}`),
+  undo: (patchId: string) => post<{ ok: boolean }>(`/v1/patches/${patchId}/undo`),
 
   sweep: (kind: string) => post<any>(`/v1/sweep/${kind}`),
   organise: () => post<any>("/v1/organise", {}),

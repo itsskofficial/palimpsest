@@ -3,10 +3,11 @@
 import { motion } from "motion/react";
 import type { SetupState } from "@/lib/api";
 
-export type Tab = "capture" | "ask" | "settings";
+export type Tab = "capture" | "activity" | "ask" | "settings";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "capture", label: "Capture" },
+  { id: "activity", label: "Activity" },
   { id: "ask", label: "Ask" },
   { id: "settings", label: "Settings" },
 ];

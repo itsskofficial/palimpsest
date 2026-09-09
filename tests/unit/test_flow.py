@@ -473,3 +473,93 @@ def test_a_resync_does_not_wipe_a_page_profile(store, workspace):
     assert page["summary"] == "the index of everything about attention"
     assert page["topics"] == ["attention", "transformers"]
     assert page["last_edited"] == "2026-04-09T00:00:00.000Z", "the sync still happened"
+
+
+# ---------------------------------------------------------------------------
+# one document must not become several pages about the same thing
+# ---------------------------------------------------------------------------
+
+
+def test_two_claims_on_one_topic_create_one_page_not_two():
+    """The fragmenting failure, caught inside a single source.
+
+    Every claim is classified against the notes as they were *before* this source, which
+    is correct — the index cannot hold pages that do not exist yet. The consequence is
+    that two claims from one document about one topic both come back `new` with nothing
+    to attach to, and each asks for its own page.
+
+    Found live on the very first capture: a two-sentence note about attention produced
+    two Notion pages, both titled "Attention". A tool whose entire purpose is to stop
+    notes fragmenting cannot be the thing that fragments them.
+    """
+    from palimpsest.plan import plan
+    from palimpsest.types import (
+        Claim,
+        ClaimType,
+        Judgement,
+        OpKind,
+        Relation,
+        Source,
+        new_id,
+    )
+
+    source = Source(source_id=new_id("src_"), kind="text", title="note",
+                    text="two sentences about one topic")
+    claims, judgements = {}, []
+    for text in ("Attention divides the logits by the square root of the key dimension.",
+                 "Without that divisor the dot products grow with the dimension."):
+        claim = Claim(claim_id=new_id("clm_"), text=text, type=ClaimType.FACT,
+                      topics=("attention",))
+        claims[claim.claim_id] = claim
+        judgements.append(Judgement(claim_id=claim.claim_id, relation=Relation.NEW,
+                                    confidence=0.95, target_page_id=None,
+                                    rationale="nothing covers this", model="fake"))
+
+    result = plan(judgements, claims, source, _NoStore(), default_parent="pg_root")
+
+    creations = [op for op in result.patch.operations if op.kind is OpKind.CREATE_PAGE]
+    assert len(creations) == 1, [op.payload.get("title") for op in creations]
+
+    # Both claims survive the merge — folding must not lose the second one.
+    body = str(creations[0].payload["children"])
+    assert "square root of the key dimension" in body
+    assert "dot products grow with the dimension" in body
+    assert creations[0].payload["merged_claims"] == [judgements[1].claim_id]
+
+
+def test_pages_with_different_titles_are_still_created_separately():
+    """The merge is by title. Two genuinely different topics in one document must not be
+    collapsed into one page just because they arrived together."""
+    from palimpsest.plan import plan
+    from palimpsest.types import (
+        Claim,
+        ClaimType,
+        Judgement,
+        OpKind,
+        Relation,
+        Source,
+        new_id,
+    )
+
+    source = Source(source_id=new_id("src_"), kind="text", title="note", text="x")
+    claims, judgements = {}, []
+    for topic in ("attention", "softmax"):
+        claim = Claim(claim_id=new_id("clm_"), text=f"A fact about {topic}.",
+                      type=ClaimType.FACT, topics=(topic,))
+        claims[claim.claim_id] = claim
+        judgements.append(Judgement(claim_id=claim.claim_id, relation=Relation.NEW,
+                                    confidence=0.95, rationale="new", model="fake"))
+
+    result = plan(judgements, claims, source, _NoStore(), default_parent="pg_root")
+    creations = [op for op in result.patch.operations if op.kind is OpKind.CREATE_PAGE]
+    assert sorted(op.payload["title"] for op in creations) == ["Attention", "Softmax"]
+
+
+class _NoStore:
+    """The planner only reads page titles and roles; a real store is not needed here."""
+
+    def get_page(self, page_id):
+        return None
+
+    def get_block(self, block_id):
+        return None

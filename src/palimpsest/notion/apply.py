@@ -421,7 +421,45 @@ def apply_patch(client: NotionClient, store, patch: Patch, *,
         patch.status = result.status
         store.put_patch(patch)
         store.set_patch_status(patch.patch_id, result.status, reviewer=reviewer)
+        _refresh_mirror(client, store, patch)
     return result
+
+
+def _refresh_mirror(client: NotionClient, store, patch: Patch) -> None:
+    """Pull the pages this patch touched back into the mirror.
+
+    Without this the product visibly fails its own thesis on the *second* capture. The
+    classifier reads the mirror, the mirror is only updated by `sync`, and a page created
+    a minute ago by an applied patch is not in it — so the next source about the same
+    topic finds nothing to corroborate, is judged `new`, and creates the page again. Two
+    pages called "Attention", from the tool whose entire purpose is to stop exactly that.
+
+    Re-reading from Notion rather than writing what we think we wrote, because only
+    Notion knows the block ids it just minted, and a mirror holding invented ids is worse
+    than one holding nothing: later operations would target blocks that do not exist.
+
+    Fetched by id rather than through `sync`, which enumerates via Notion's search
+    index — and that index is eventually consistent, so a page created a second ago
+    is reliably missing from it. A handful of API calls, scoped to the pages this
+    patch touched. Never fatal: the write already happened and succeeded, and a
+    stale mirror is a thing the next sync fixes.
+    """
+    touched: set[str] = set()
+    for op in patch.operations:
+        if op.applied_at is None:
+            continue
+        page_id = (op.result or {}).get("page_id") or _page_of(store, op.target)
+        if page_id:
+            touched.add(page_id)
+    if not touched:
+        return
+    try:
+        from palimpsest.notion import mirror
+
+        mirror.refresh_pages(client, store, sorted(touched))
+    except Exception as e:  # pragma: no cover - the write is already done
+        log.warning("could not refresh the mirror after %s (%s); the next sync will "
+                    "pick it up", patch.patch_id, e)
 
 
 def revert_patch(client: NotionClient, store, patch: Patch,

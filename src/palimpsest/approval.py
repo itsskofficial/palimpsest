@@ -46,15 +46,25 @@ APPROVAL_TTL_S = 24 * 3600
 def _split(patch: Patch, settings: Any) -> tuple[list, list, list]:
     """Partition operations into (blocked, auto, held).
 
-    `blocked` is contradictions — they never apply and never even become an approval;
-    they are surfaced as a review item elsewhere. `auto` is what the autonomy setting
-    permits right now. `held` is the remainder, which waits for a human.
+    One authority, `settings.may_auto_apply`, rather than two. This used to consult the
+    autonomy setting *and* short-circuit on the relation, so a contradiction was refused
+    twice — which was right while no setting could ever permit one, and became a silent
+    contradiction of the settings screen the moment `everything` existed. A gate that
+    disagrees with the switch the operator just moved is worse than a strict gate.
+
+    `blocked` is now what no *current* setting permits: a contradiction below the top
+    rung, which never applies and never even becomes an approval, because "approve this
+    conflicting rewrite" is not a question with a good answer — it is surfaced as a
+    review item with both sides instead. `auto` is what the setting permits right now.
+    `held` is the remainder, waiting for a human.
     """
     blocked, auto, held = [], [], []
     for op in patch.operations:
-        if op.relation is Relation.CONTRADICTS:
+        permitted = settings.may_auto_apply(op.risk_tier)
+        if op.relation is Relation.CONTRADICTS and not permitted:
             blocked.append(op)
-        elif op.auto_appliable and settings.may_auto_apply(op.risk_tier):
+        elif permitted and (op.auto_appliable
+                            or op.relation is Relation.CONTRADICTS):
             auto.append(op)
         else:
             held.append(op)
@@ -65,7 +75,11 @@ def gate(store, patch: Patch, settings: Any, *, notion_factory=None,
          journal_factory=None, session_id: str | None = None,
          chat_id: str | None = None, reviewer: str = "auto",
          summary: str | None = None) -> dict:
-    """Apply what may apply; hold the rest as an approval. Never writes a contradiction.
+    """Apply what may apply; hold the rest as an approval.
+
+    A contradiction is written only at `PALIMPSEST_AUTONOMY=everything`, and what is
+    written is a record of the disagreement beside the line it argues with — never an
+    edit to that line. See `plan._contradiction_ops`.
 
     Returns a dict describing the outcome: how many applied, how many are held, and the
     `approval_id` a surface can turn into an Approve/Reject control.

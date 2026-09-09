@@ -25,14 +25,20 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 from palimpsest.notion.blocks import block_to_text, links_in, plain_text
 from palimpsest.notion.client import NotionClient, NotionError
 
-__all__ = ["MirrorResult", "guess_role", "page_title", "sync"]
+__all__ = [
+    "MirrorResult",
+    "guess_role",
+    "page_title",
+    "refresh_pages",
+    "sync",
+]
 
 log = logging.getLogger("palimpsest.mirror")
 
@@ -180,6 +186,62 @@ def _collect_blocks(client: NotionClient, page_id: str, root: str,
     return out
 
 
+def refresh_pages(client: NotionClient, store, page_ids: Iterable[str], *,
+                  profile: bool = True) -> int:
+    """Pull specific pages into the mirror by id. Returns how many were refreshed.
+
+    `sync` enumerates the workspace through `search`, which is eventually consistent: a
+    page created seconds ago is reliably absent from it. That is fine for a periodic
+    sync and useless for the case that matters most — the mirror must know about a page
+    the moment palimpsest itself creates one, or the next capture about the same topic
+    finds nothing to corroborate and creates a second copy.
+
+    So this fetches each page directly. A handful of API calls, no search, no waiting for
+    an index to catch up. Errors are collected rather than raised: the write that
+    prompted this has already succeeded, and a page that could not be re-read is a stale
+    mirror row, which the next sync fixes.
+    """
+    refreshed = 0
+    for raw_id in page_ids:
+        pid = (raw_id or "").replace("-", "")
+        if not pid:
+            continue
+        try:
+            page = client.get_page(pid)
+            blocks = _collect_blocks(client, pid, pid)
+        except NotionError as e:
+            log.warning("could not refresh %s in the mirror: %s %s", pid[:8], e.code,
+                        e.message[:120])
+            continue
+
+        texts = [b["text"] for b in blocks if b["text"]]
+        parent_id, parent_kind = _parent(page)
+        title = page_title(page)
+        row: dict[str, Any] = {
+            "page_id": pid,
+            "parent_id": parent_id,
+            "parent_kind": parent_kind,
+            "title": title,
+            "url": page.get("url"),
+            "icon": ((page.get("icon") or {}).get("emoji")
+                     if isinstance(page.get("icon"), dict) else None),
+            "archived": bool(page.get("in_trash") or page.get("archived")),
+            "created_time": page.get("created_time"),
+            "last_edited": page.get("last_edited_time") or "",
+            "content_hash": _content_hash(texts),
+            "topics": [],
+        }
+        if profile:
+            row["role"] = guess_role(title, blocks)
+            row["summary"] = " ".join(texts)[:400] or None
+
+        store.put_pages([row])
+        if blocks:
+            store.put_blocks(blocks)
+        refreshed += 1
+    return refreshed
+
+
 def sync(client: NotionClient, store, *, incremental: bool = True,
          roots: tuple[str, ...] = (), limit: int | None = None,
          profile: bool = True, on_progress: Callable[[int, int, str], None] | None = None,
@@ -266,9 +328,16 @@ def sync(client: NotionClient, store, *, incremental: bool = True,
             store.put_links(link_rows)
             result.links += len(link_rows)
 
-    if not incremental and not roots and not limit:
-        # Only a complete walk can tell what has genuinely disappeared.
-        result.archived = store.drop_missing(seen)
+    if not incremental and not limit:
+        # Only a complete walk can tell what has genuinely disappeared — and when the
+        # mirror is restricted to roots, "complete" means complete *within those roots*.
+        # Skipping the sweep entirely whenever roots were given, which is what this did
+        # before, left every deleted page in the mirror for ever. That is not a cosmetic
+        # staleness: a deleted page stays a retrieval candidate, so a later claim can be
+        # corroborated against a block that no longer exists and the apply fails with a
+        # 404 nobody can explain. Roots are the default configuration, so this was the
+        # common case rather than the edge one.
+        result.archived = store.drop_missing(seen, within=roots or None)
 
     result.api_calls = client.calls
     result.seconds = time.perf_counter() - started

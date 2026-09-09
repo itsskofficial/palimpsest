@@ -269,9 +269,26 @@ class PostgresStore:
             cur.execute("SELECT page_id, last_edited FROM pages")
             return {r[0]: (r[1] or "") for r in cur.fetchall()}
 
-    def drop_missing(self, seen_page_ids: set[str]) -> int:
+    def drop_missing(self, seen_page_ids: set[str],
+                     within: tuple[str, ...] | None = None) -> int:
+        """See the SQLite implementation for why `within` exists.
+
+        Postgres can walk the parent links itself, so the subtree is one recursive CTE
+        rather than a graph traversal in Python.
+        """
         with self._cur(dict_rows=False) as cur:
-            cur.execute("SELECT page_id FROM pages WHERE archived=false")
+            if within:
+                cur.execute(
+                    "WITH RECURSIVE subtree(page_id) AS ("
+                    "  SELECT page_id FROM pages WHERE page_id = ANY(%s)"
+                    "  UNION"
+                    "  SELECT p.page_id FROM pages p JOIN subtree s "
+                    "         ON p.parent_id = s.page_id)"
+                    " SELECT page_id FROM pages "
+                    " WHERE archived=false AND page_id IN (SELECT page_id FROM subtree)",
+                    (list(within),))
+            else:
+                cur.execute("SELECT page_id FROM pages WHERE archived=false")
             known = {r[0] for r in cur.fetchall()}
             gone = known - seen_page_ids
             if gone:

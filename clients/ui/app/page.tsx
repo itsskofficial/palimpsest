@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityFeed } from "@/components/ActivityFeed";
+import { ActivityLog } from "@/components/ActivityLog";
 import { AskPanel } from "@/components/AskPanel";
 import { DropZone } from "@/components/DropZone";
 import { Onboarding } from "@/components/Onboarding";
@@ -10,7 +11,7 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { Shell, type Tab } from "@/components/Shell";
 import { api, type SetupState } from "@/lib/api";
 
-const TABS: Tab[] = ["capture", "ask", "settings"];
+const TABS: Tab[] = ["capture", "activity", "ask", "settings"];
 
 /** The tab named by `#settings` and friends, so a link can land on one. */
 function tabFromHash(): Tab {
@@ -74,7 +75,22 @@ export default function Home() {
             className="space-y-10"
           >
             <DropZone onCaptured={() => setNudge((n) => n + 1)} />
-            <ActivityFeed refreshKey={nudge} />
+            {/*
+              Only the most recent capture. The home page answers "did that land?" —
+              a question about one thing that just happened — and a full history here
+              buries the drop zone under a scroll of everything you have ever sent.
+              The rest lives in Activity, one tab away.
+            */}
+            <ActivityFeed
+              refreshKey={nudge}
+              limit={1}
+              onSeeAll={() => goTab("activity")}
+            />
+          </motion.div>
+        )}
+        {tab === "activity" && (
+          <motion.div key="activity" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.24 }}>
+            <ActivityLog />
           </motion.div>
         )}
         {tab === "ask" && (

@@ -1,6 +1,6 @@
 # 9. BM25 over a vector database
 
-**Status:** Accepted
+**Status:** Accepted, extended 2026-09-09 (see the foot of this file)
 **Date:** 2026-09-09
 
 ## Context
@@ -60,3 +60,27 @@ there is the bottleneck, blend dense retrieval into the agent's `search_notes` p
 — where a key is already assumed — and leave the sweeps and candidate generation lexical.
 Replacing BM25 outright would mean withdrawing the offline claim, which is a far larger
 decision than a retrieval change.
+
+
+---
+
+## Extension — hybrid retrieval (2026-09-09)
+
+The revisit condition fired, from the direction predicted: a note reading "the CKA/RSA
+stuff" and a source saying "representational similarity analysis" share no token, so BM25
+cannot rank that note at all — not badly, *at all*. The claim is filed as `new`, a second
+page about the same topic appears, and the tool meant to stop fragmenting has caused it.
+
+BM25 was not replaced. `Index` takes an optional embedder; with none — the default, and
+the only state that needs no key — retrieval is exactly what this ADR describes, and the
+sweeps still run offline. With one, the recall query scores *every* block by cosine and
+blends it with the lexical score, because a note sharing no vocabulary with the claim
+cannot be re-ranked into view: it has to be found in the first place.
+
+No vector database. Vectors are float32 blobs in the existing SQLite table, keyed by
+block, text hash and model, and cosine over a few thousand of them is milliseconds of
+pure Python. The operational cost this ADR refused — a second datastore to run, back up
+and keep consistent with the mirror — is still refused.
+
+The eval measures the gap rather than asserting it: two fixture cases are unreachable
+lexically, scoring 0% with no embedder and 100% with one.

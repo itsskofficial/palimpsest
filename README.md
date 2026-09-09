@@ -30,6 +30,8 @@ Prefer the command line? Everything the bot does is also a command:
 
 ```bash
 palimpsest setup                      # re-run the wizard any time
+palimpsest eval retrieval             # can it find the right page? no key needed
+palimpsest eval component             # how good is the classifier, on your model
 palimpsest agent "what did I write about attention?"
 palimpsest sync                       # mirror your Notion locally
 palimpsest sweep duplicates           # what you already wrote twice (no model needed)
@@ -67,7 +69,7 @@ create" — it is *how does this claim relate to what I already wrote?*
 | **`supersedes`** | same fact, newer source → strike the old, add the new, footnote both | medium |
 | **`duplicate`** | you wrote this on *another* page → link or merge. Never re-add. | medium |
 | **`extends`** | related, but belongs on a different page | medium |
-| **`contradicts`** | the source disagrees with the page → **never auto-applied, at any setting** | high |
+| **`contradicts`** | the source disagrees with the page → the disagreement is *recorded* beside the line, never resolved | high |
 
 Three consequences fall out of that table, and they are the whole design:
 
@@ -78,9 +80,11 @@ sentence you already wrote, and *no prose is added at all*.
 
 **`contradicts` is the safety property everything rests on.** A knowledge base that
 silently replaces a true claim with a false one is strictly worse than no automation,
-because you stop knowing which parts to trust. Contradictions are surfaced with both
-sides and both sources, and you decide. There is deliberately no autonomy level that
-changes this.
+because you stop knowing which parts to trust. So the system never decides which of two
+sourced claims is true — not at any setting. What the top autonomy level adds is the
+*recording* of a disagreement: the competing claim written directly beneath the line it
+argues with, both sources cited, the original sentence untouched. One append, one
+inverse, one tap to undo. Deciding stays yours.
 
 **Every edit is typed, small, and exactly reversible.** `add_citation`, `update_text`,
 `insert_footnote`, `strike_block`, `merge_pages` — there is no `rewrite_page` in the
@@ -378,6 +382,8 @@ Nothing is required to *look*; two keys are required to be useful. See
 | Variable | Needed for |
 |---|---|
 | `NOTION_TOKEN` | everything that touches Notion |
+| `PALIMPSEST_MODEL_BASE_URL` + `PALIMPSEST_MODEL` | any OpenAI-compatible endpoint — Groq, OpenRouter, a local Ollama. Otherwise the provider is inferred from whichever key is set |
+| `PALIMPSEST_EMBED_BASE_URL` / `OPENAI_API_KEY` | optional vectors. Without them retrieval is BM25, which is the floor the product is designed around |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_CHATS` | the bot. The allowlist is not optional |
 | `ANTHROPIC_API_KEY` | extraction, classification, contradiction sweep |
 | `DEEPGRAM_API_KEY` / `GROQ_API_KEY` / `SARVAM_API_KEY` | audio. Any one. **No offline fallback** — a recording fails rather than becoming an empty source |

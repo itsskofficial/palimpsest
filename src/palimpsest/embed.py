@@ -33,21 +33,13 @@ import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
+from palimpsest.config import EMBED_PROVIDERS, describe_embedding, model_getter
+
 __all__ = ["CachedEmbedder", "Embedder", "OpenAIEmbedder", "available", "resolve"]
 
 log = logging.getLogger("palimpsest.embed")
 
 USER_AGENT = "palimpsest/0.1 (+https://github.com/itsskofficial/palimpsest)"
-
-#: Providers that serve OpenAI-shaped embeddings, and a sensible model for each. Groq is
-#: deliberately absent: it serves no embeddings endpoint, so someone whose only key is a
-#: Groq one gets lexical retrieval and is told why rather than getting 404s.
-PROVIDERS: dict[str, tuple[str, str, str]] = {
-    "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1", "text-embedding-3-small"),
-    "together": ("TOGETHER_API_KEY", "https://api.together.xyz/v1",
-                 "BAAI/bge-large-en-v1.5"),
-    "mistral": ("MISTRAL_API_KEY", "https://api.mistral.ai/v1", "mistral-embed"),
-}
 
 #: How many texts go in one request. Large enough to matter, small enough that a failure
 #: does not throw away much work.
@@ -204,51 +196,28 @@ class CachedEmbedder:
 # ---------------------------------------------------------------------------
 
 
-def _getter(settings: Any):
-    """Same rule as the chat layer: a `Settings` is authoritative; otherwise the env."""
-    import os
-
-    if settings is None:
-        return lambda key: os.environ.get(key) or ""
-    overrides = getattr(settings, "model_env", None) or {}
-    extra = {"PALIMPSEST_EMBED_MODEL": getattr(settings, "embed_model", "") or "",
-             "PALIMPSEST_EMBED_BASE_URL": getattr(settings, "embed_base_url", "") or "",
-             "PALIMPSEST_EMBED_API_KEY": getattr(settings, "embed_api_key", "") or ""}
-    return lambda key: str(overrides.get(key) or extra.get(key) or "")
-
-
 def available(settings: Any = None) -> bool:
     """Whether vectors can be computed at all. False is a supported state."""
-    return resolve(settings, store=None) is not None
+    return describe_embedding(settings) is not None
 
 
 def resolve(settings: Any = None, *, store: Any = None) -> Embedder | None:
     """Build an embedder from configuration, or `None` if nothing can serve one.
 
     Returning `None` rather than raising is the whole posture of this module: the caller
-    passes it to `Index(embedder=...)`, which treats `None` as "lexical only" and carries
-    on. Nothing upstream has to branch.
+    hands it to `Index(embedder=...)`, which reads `None` as "lexical only" and carries
+    on. Nothing upstream branches on it.
     """
-    get = _getter(settings)
-
-    base = get("PALIMPSEST_EMBED_BASE_URL")
-    model = get("PALIMPSEST_EMBED_MODEL")
-    key = get("PALIMPSEST_EMBED_API_KEY") or get("PALIMPSEST_MODEL_API_KEY")
-    name = "embeddings"
-
-    if not base:
-        for provider, (env, url, default) in PROVIDERS.items():
-            if get(env):
-                base, key, name = url, get(env), provider
-                model = model or default
-                break
-
-    if not base:
-        return None
-    if not model:
-        log.info("PALIMPSEST_EMBED_BASE_URL is set but PALIMPSEST_EMBED_MODEL is not; "
-                 "retrieval stays lexical")
+    setup = describe_embedding(settings)
+    if setup is None:
         return None
 
-    inner = OpenAIEmbedder(model, api_key=key or None, base_url=base, name=name)
+    get = model_getter(settings)
+    key = (get("PALIMPSEST_EMBED_API_KEY")
+           or getattr(settings, "embed_api_key", None)
+           or get(EMBED_PROVIDERS.get(setup.provider, ("PALIMPSEST_MODEL_API_KEY",))[0])
+           or get("PALIMPSEST_MODEL_API_KEY"))
+    inner = OpenAIEmbedder(setup.model, api_key=key or None,
+                           base_url=setup.base_url or "https://api.openai.com/v1",
+                           name=setup.provider)
     return CachedEmbedder(inner, store) if store is not None else inner

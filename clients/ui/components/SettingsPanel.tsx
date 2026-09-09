@@ -175,7 +175,17 @@ function WritePosture({
     {
       v: "medium",
       label: "Edits too",
-      d: "Rewrites and merges apply. Contradictions still always wait.",
+      d: "Rewrites and merges apply. Contradictions wait.",
+    },
+    {
+      v: "full",
+      label: "Everything but disagreements",
+      d: "All seven relations apply except contradictions, which wait for you.",
+    },
+    {
+      v: "everything",
+      label: "Disagreements too",
+      d: "A conflicting source is written in beside the line it argues with — both sides, both cited. It never picks a winner, and Undo takes it back.",
     },
   ];
 
@@ -183,7 +193,8 @@ function WritePosture({
     <div className="rounded-xl border border-rule bg-raised p-5">
       <h3 className="font-display text-lg text-ink">What may it change on its own?</h3>
       <p className="mt-1 text-[13px] text-soft">
-        Contradictions are never applied automatically, at any setting.
+        Nothing here lets it decide which of two sources is right. Every change is
+        listed in Activity with a way to take it back.
       </p>
 
       <label className="mt-4 flex cursor-pointer items-center gap-3">

@@ -208,20 +208,42 @@ class SQLiteStore:
         return {r[0]: (r[1] or "") for r in self.conn.execute(
             "SELECT page_id, last_edited FROM pages")}
 
-    def drop_missing(self, seen_page_ids: set[str]) -> int:
+    def drop_missing(self, seen_page_ids: set[str],
+                     within: tuple[str, ...] | None = None) -> int:
         """Mark pages absent from a full sync as archived.
 
         Archived rather than deleted: a page you removed in Notion may still be the
         provenance target of ledger entries, and a dangling foreign key in the history
         is worse than a tombstone.
+
+        `within` restricts the sweep to a set of roots and everything recorded beneath
+        them, using the stored parent links. A sync scoped to part of a workspace has no
+        opinion about the rest of it, and archiving pages it never looked at would be
+        worse than leaving them.
         """
         known = {r[0] for r in self.conn.execute("SELECT page_id FROM pages WHERE archived=0")}
+        if within:
+            known &= self._descendants(within)
         gone = known - seen_page_ids
         if gone:
             self.conn.executemany("UPDATE pages SET archived=1 WHERE page_id=?",
                                   [(p,) for p in gone])
             self.conn.commit()
         return len(gone)
+
+    def _descendants(self, roots: tuple[str, ...]) -> set[str]:
+        """Every page recorded under these roots, the roots themselves included."""
+        parents: dict[str, str | None] = {
+            r[0]: r[1] for r in self.conn.execute("SELECT page_id, parent_id FROM pages")
+        }
+        out: set[str] = set(roots)
+        frontier = set(roots)
+        while frontier:
+            children = {pid for pid, parent in parents.items()
+                        if parent in frontier and pid not in out}
+            out |= children
+            frontier = children
+        return out
 
     # -- the pipeline ----------------------------------------------------------
 

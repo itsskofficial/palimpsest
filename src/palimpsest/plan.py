@@ -91,31 +91,52 @@ def _anchor_url(source: Source, claim: Claim) -> str | None:
 
 def plan(judgements: list[Judgement], claims: dict[str, Claim], source: Source,
          store, *, min_confidence: float = 0.75, footnotes: bool = True,
-         default_parent: str | None = None) -> PlanResult:
+         default_parent: str | None = None,
+         record_contradictions: bool = False) -> PlanResult:
     """Build a patch from judgements, routing what a human must see to `review`.
 
     An operation reaching the patch means "this may be applied, subject to the autonomy
-    setting". An item reaching `review` means "a human must look at this before
-    anything happens", and there are exactly two ways in: the relation is
-    `CONTRADICTS`, or confidence is below the bar.
+    setting". An item reaching `review` means "a human must look at this before anything
+    happens", and there are two ways in: confidence below the bar, or a contradiction
+    while `record_contradictions` is off.
+
+    `record_contradictions` is what `PALIMPSEST_AUTONOMY=everything` turns on. It does
+    not make the system pick a winner — nothing here ever does. It emits an operation
+    that writes the disagreement *next to* the contradicted sentence, with both sources
+    cited, so the page tells you there is an argument rather than quietly asserting one
+    side. The old sentence is left exactly as it was, which is what keeps the operation
+    a single reversible append rather than a rewrite.
     """
     patch = Patch(patch_id=new_id("pch_"), source_id=source.source_id)
     result = PlanResult(patch=patch)
+    #: Pages this patch is already creating, by lower-cased title — see `_merged`.
+    new_pages: dict[str, Operation] = {}
 
     for judgement in judgements:
         claim = claims.get(judgement.claim_id)
         if claim is None:  # pragma: no cover - defensive
             continue
 
-        # Contradictions never produce an operation, at any confidence.
         if judgement.relation is Relation.CONTRADICTS:
-            result.review.append({
-                "reason": "contradiction",
-                "claim": claim.as_dict(),
-                "judgement": judgement.as_dict(),
-                "existing_text": judgement.existing_text,
-                "page": _page_title(store, judgement.target_page_id),
-            })
+            # Even when recording them automatically, a contradiction the classifier was
+            # unsure about still goes to a human: "these two disagree" is only worth
+            # writing into the page if we believe it.
+            ops = (_contradiction_ops(judgement, claim, source, store, url=_anchor_url(
+                source, claim)) if record_contradictions
+                and judgement.confidence >= min_confidence else [])
+            if not ops:
+                result.review.append({
+                    "reason": "contradiction",
+                    "claim": claim.as_dict(),
+                    "judgement": judgement.as_dict(),
+                    "existing_text": judgement.existing_text,
+                    "page": _page_title(store, judgement.target_page_id),
+                })
+                continue
+            for op in ops:
+                op.payload.setdefault("rationale", judgement.rationale)
+                op.payload.setdefault("confidence", round(judgement.confidence, 3))
+            patch.operations.extend(ops)
             continue
 
         if judgement.confidence < min_confidence:
@@ -144,9 +165,109 @@ def plan(judgements: list[Judgement], claims: dict[str, Claim], source: Source,
         for op in ops:
             op.payload.setdefault("rationale", judgement.rationale)
             op.payload.setdefault("confidence", round(judgement.confidence, 3))
-        patch.operations.extend(ops)
+
+        patch.operations.extend(_merged(ops, new_pages))
 
     return result
+
+
+def _contradiction_ops(judgement: Judgement, claim: Claim, source: Source, store, *,
+                       url: str | None) -> list[Operation]:
+    """Write the disagreement into the page, without deciding it.
+
+    One `append_block` on the page, inserted directly after the contradicted sentence,
+    carrying the new claim, the source that made it, and a marker saying this conflicts
+    with the line above. The existing text is not touched, struck, or edited — so the
+    operation inverts by archiving one block, and a reader who disagrees with the machine
+    loses nothing by undoing it.
+
+    This is the automatic action for a contradiction and it is deliberately not a
+    resolution. Choosing which of two sourced claims is true is the judgement a person
+    keeps; noticing that the two exist and putting them next to each other is the work
+    that otherwise never gets done.
+    """
+    anchor = judgement.target_block_id
+    if not anchor:
+        return []
+    # The parent is the *page*; the contradicted block is only where to insert. Notion
+    # rejects an append whose `after` is not a child of the target, so making the block
+    # its own parent fails with a message about parentage that reads like a data problem.
+    page_id = judgement.target_page_id or (store.get_block(anchor) or {}).get("page_id")
+    if not page_id:
+        return []
+    return [Operation(
+        kind=OpKind.APPEND_BLOCK,
+        target=page_id,
+        payload={
+            "children": [
+                _conflict(claim.text, _cite_text(source, claim), url),
+            ],
+            "after_block_id": anchor,
+            "contradicts_block_id": anchor,
+            "existing_text": judgement.existing_text,
+            "anchor": claim.anchor.as_dict() if claim.anchor else None,
+        },
+        claim_id=claim.claim_id,
+        relation=Relation.CONTRADICTS,
+    )]
+
+
+def _conflict(text: str, cite: str, url: str | None) -> dict:
+    """A red callout: the competing claim, its source, and what it argues with."""
+    return {"object": "block", "type": "callout",
+            "callout": {
+                "rich_text": [
+                    {"type": "text",
+                     "text": {"content": "Conflicts with the line above — ", "link": None},
+                     "annotations": {"bold": True, "italic": False,
+                                     "strikethrough": False, "underline": False,
+                                     "code": False, "color": "red"}},
+                    {"type": "text", "text": {"content": text[:1800], "link": None}},
+                    {"type": "text",
+                     "text": {"content": f"  ({cite})",
+                              "link": {"url": url} if url else None},
+                     "annotations": {"bold": False, "italic": True,
+                                     "strikethrough": False, "underline": False,
+                                     "code": False, "color": "gray"}},
+                ],
+                "icon": {"type": "emoji", "emoji": "\u26a0\ufe0f"},
+                "color": "red_background"}}
+
+
+def _merged(ops: list[Operation], new_pages: dict[str, Operation]) -> list[Operation]:
+    """Fold a second page-creation with the same title into the first.
+
+    Every claim is classified against the notes *as they were before this source*, which
+    is right — the index cannot contain pages that do not exist yet. But it means two
+    claims from one document about one topic each come back `new` with nothing to attach
+    to, and each asks for its own page.
+
+    The result was visible on the very first capture: a two-sentence note about attention
+    produced two Notion pages, both called "Attention". A tool whose purpose is to stop
+    notes fragmenting cannot ship that.
+
+    So page creations are coalesced within the patch: the first claim creates the page,
+    later ones about the same title become bullets on it. Titles are matched
+    case-insensitively because they are derived from topic strings, which vary in case.
+    Only `CREATE_PAGE` merges — everything else already targets an existing block or page
+    and has nothing to collide with.
+    """
+    out: list[Operation] = []
+    for op in ops:
+        if op.kind is not OpKind.CREATE_PAGE:
+            out.append(op)
+            continue
+        key = str(op.payload.get("title", "")).strip().lower()
+        first = new_pages.get(key)
+        if first is None:
+            new_pages[key] = op
+            out.append(op)
+            continue
+        # Fold this claim's blocks into the page already being created. The citation
+        # callout comes along with it, so provenance is not lost by merging.
+        first.payload.setdefault("children", []).extend(op.payload.get("children") or [])
+        first.payload.setdefault("merged_claims", []).append(op.claim_id)
+    return out
 
 
 def _page_title(store, page_id: str | None) -> str:

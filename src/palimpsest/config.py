@@ -9,10 +9,11 @@ Two rules the validation enforces, because each is a way this becomes unsafe:
    no auth by design when it is local. The moment it listens on `0.0.0.0` that is a
    hole, and the app refuses rather than discovering it later.
 
-Autonomy is a *ladder*, not a switch: `PALIMPSEST_AUTONOMY` names the highest risk
-tier that may apply without review (`none` → `low` → `medium` → `full`). `full` means
-everything the classifier is allowed to decide on its own, and it still stops short of
-contradictions — those are never automatic, at any setting.
+Autonomy is a *ladder*, not a switch: `PALIMPSEST_AUTONOMY` names the highest risk tier
+that may apply without review (`none` → `low` → `medium` → `full` → `everything`).
+`full` stops short of contradictions. `everything` adds them, and what it applies is a
+record of the disagreement rather than a resolution of it — the system never decides
+which of two claims is true, at any setting.
 
 The model is configuration too. `PALIMPSEST_MODEL_BASE_URL` points at anything that
 speaks the OpenAI API; otherwise the provider is inferred from whichever key is present.
@@ -28,8 +29,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-__all__ = ["MODEL_PROVIDERS", "ModelSetup", "Settings", "config_path", "describe_setup",
-           "load", "load_env_file", "model_getter", "redact"]
+__all__ = ["EMBED_PROVIDERS", "MODEL_PROVIDERS", "ModelSetup", "Settings",
+           "config_path", "describe_embedding", "describe_setup", "load",
+           "load_env_file", "model_getter", "redact"]
 
 
 def config_path() -> Path:
@@ -94,24 +96,31 @@ _SECRET_HINTS = ("key", "secret", "password", "token", "dsn", "url", "credential
 #: contradictions — see `types.Relation.risk`.
 RISK_TIERS = frozenset({"low", "medium", "high"})
 
-#: The tier that no autonomy level may ever admit.
+#: The tier that no level below `everything` may admit.
 #:
-#: A knowledge base that silently replaces a true claim with a false one is strictly
-#: worse than no automation at all, because you stop knowing which parts to trust. This
-#: is the one property the whole design rests on, so it is a named constant that the
-#: levels below are *derived from* rather than a rule each level remembers to follow.
+#: A knowledge base that silently replaces a true claim with a false one is worse than no
+#: automation at all, because you stop knowing which parts to trust. Every level up to
+#: and including `full` therefore refuses this tier, and the levels are derived from this
+#: constant rather than each remembering the rule for itself.
 NEVER_AUTOMATIC = frozenset({"high"})
 
 #: Which risk tiers may be applied without a human, per level.
 #:
-#: `full` is defined by subtraction, not by listing: it means "everything that is
-#: allowed to be automatic", so if a tier were ever added it would be included here and
-#: excluded from `NEVER_AUTOMATIC` deliberately rather than by forgetting.
+#: `full` is defined by subtraction: "everything that is allowed to be automatic", so a
+#: new tier would be included here and excluded from `NEVER_AUTOMATIC` deliberately
+#: rather than by forgetting.
+#:
+#: `everything` is the operator saying, explicitly, that they would rather see a
+#: contradiction recorded in the page and undo it than be asked about it. It is not the
+#: same as the system deciding which of two claims is true — it never does that, at any
+#: setting. What it applies is a *record of the disagreement*: both sides, both sources,
+#: side by side, in one reversible operation. See `plan._contradiction_ops`.
 AUTONOMY_LEVELS: dict[str, frozenset[str]] = {
     "none": frozenset(),
     "low": frozenset({"low"}),
     "medium": frozenset({"low", "medium"}),
     "full": RISK_TIERS - NEVER_AUTOMATIC,
+    "everything": RISK_TIERS,
 }
 
 
@@ -133,6 +142,17 @@ MODEL_PROVIDERS: dict[str, tuple[str, str, str]] = {
     "deepseek": ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1", "deepseek-chat"),
     "mistral": ("MISTRAL_API_KEY", "https://api.mistral.ai/v1", "mistral-large-latest"),
     "xai": ("XAI_API_KEY", "https://api.x.ai/v1", "grok-4"),
+}
+
+
+#: Hosts that serve OpenAI-shaped embeddings, and a sensible model for each. Groq is
+#: deliberately absent: it serves no embeddings endpoint, so someone whose only key is a
+#: Groq one gets lexical retrieval and is told why rather than a string of 404s.
+EMBED_PROVIDERS: dict[str, tuple[str, str, str]] = {
+    "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1", "text-embedding-3-small"),
+    "together": ("TOGETHER_API_KEY", "https://api.together.xyz/v1",
+                 "BAAI/bge-large-en-v1.5"),
+    "mistral": ("MISTRAL_API_KEY", "https://api.mistral.ai/v1", "mistral-embed"),
 }
 
 
@@ -161,6 +181,38 @@ def model_getter(settings: Any):
         return lambda key: os.environ.get(key) or ""
     overrides = getattr(settings, "model_env", None) or {}
     return lambda key: str(overrides.get(key) or "")
+
+
+def describe_embedding(settings=None):
+    """Which embedding endpoint this configuration names, or `None` for lexical only.
+
+    Here rather than in `palimpsest.embed` for the same reason as `describe_setup`: the
+    store layer reads settings, so `config` must not import anything above it. `status`
+    also wants to print this line without building a client or making a call.
+    """
+    get = model_getter(settings)
+    extra = {
+        "PALIMPSEST_EMBED_MODEL": getattr(settings, "embed_model", "") or "",
+        "PALIMPSEST_EMBED_BASE_URL": getattr(settings, "embed_base_url", "") or "",
+        "PALIMPSEST_EMBED_API_KEY": getattr(settings, "embed_api_key", "") or "",
+    }
+
+    def value(key: str) -> str:
+        if settings is None:
+            return os.environ.get(key) or ""
+        return get(key) or extra.get(key, "")
+
+    model = value("PALIMPSEST_EMBED_MODEL")
+    base = value("PALIMPSEST_EMBED_BASE_URL")
+    if base:
+        if not model:
+            return None
+        return ModelSetup("openai-compatible", model, base,
+                          "PALIMPSEST_EMBED_BASE_URL is set")
+    for name, (env, url, default) in EMBED_PROVIDERS.items():
+        if value(env):
+            return ModelSetup(name, model or default, url, f"{env} is set")
+    return None
 
 
 def describe_setup(settings: Any = None) -> ModelSetup | None:
@@ -504,8 +556,8 @@ class Settings:
             raise ValueError(
                 f"PALIMPSEST_AUTONOMY={self.autonomy!r} is not valid. Use one of: "
                 f"{', '.join(sorted(AUTONOMY_LEVELS))}.\n"
-                "'full' is as far as the ladder goes: contradictions are never applied "
-                "automatically, at any setting."
+                "'full' stops before contradictions; 'everything' records them in "
+                "place, with both sides, rather than resolving them."
             )
         if not self.database_url.startswith(("sqlite:", "postgres://", "postgresql://")):
             raise ValueError(
@@ -553,14 +605,14 @@ class Settings:
             "notion": "configured" if self.has_notion else "MISSING",
             "notion_version": self.notion_version,
             "notion_roots": list(self.notion_root_pages) or ["(whole workspace)"],
-            "model": self.model if self.has_model else f"{self.model} (no key)",
+            "model": self._model_line(),
             "effort": {"extract": self.extract_effort, "classify": self.classify_effort},
             "firecrawl": "configured" if self.firecrawl_api_key else "off (stdlib fallback)",
             "transcribe": self.transcriber or "MISSING (audio cannot be ingested)",
             "telegram": (f"paired with {len(self.telegram_allowed_chats)} chat(s)"
                          if self.telegram_token else "off"),
             "journal": "on (Notion databases)" if self.journal else "off (SQLite only)",
-            "embeddings": "openai" if self.openai_api_key else "lexical (built-in)",
+            "embeddings": self._embed_line(),
             "apply": self.apply,
             "autonomy": self.autonomy,
             "min_confidence": self.min_confidence,
@@ -575,6 +627,25 @@ class Settings:
         d = self.as_dict()
         width = max(len(k) for k in d)
         return "\n".join(f"  {k:<{width}}  {v}" for k, v in d.items())
+
+    def _model_line(self) -> str:
+        """Which provider and model a call would actually use.
+
+        `model` is empty by default now that each provider has its own — printing the
+        raw field said nothing, and said it in a place people look precisely when
+        something is not behaving as they expected.
+        """
+        setup = self.model_setup
+        if setup is None:
+            return "none configured (the mirror and the sweeps still work)"
+        where = f" @ {setup.base_url}" if setup.base_url else ""
+        return f"{setup.provider}/{setup.model}{where}"
+
+    def _embed_line(self) -> str:
+        setup = describe_embedding(self)
+        if setup is None:
+            return "lexical only (BM25; no embedding provider configured)"
+        return f"{setup.provider}/{setup.model}"
 
     def problems(self) -> list[str]:
         """Deployment mistakes that are legal but probably wrong."""

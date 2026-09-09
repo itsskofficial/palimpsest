@@ -1,6 +1,6 @@
 # 2. Contradictions are never applied automatically
 
-**Status:** Accepted
+**Status:** Amended by the section at the foot of this file (2026-09-09)
 **Date:** 2026-09-09
 
 ## Context
@@ -57,3 +57,49 @@ Nothing. This is the one decision with no revisit condition: a measured precisio
 however good, does not change a policy about which failures are acceptable. If
 contradictions should be resolved faster, the answer is a better review surface — both
 sides side by side, one tap — not automation.
+
+
+---
+
+## Amendment — `autonomy=everything` (2026-09-09)
+
+The section above ends "Revisit if: Nothing", and that was too broad a claim. It
+conflated two powers that turn out to be separable:
+
+- **resolving** a contradiction — deciding which of two sourced claims is true, and
+  editing the notes to match;
+- **recording** one — writing down that two sources disagree, with both sides visible.
+
+The reasoning above is entirely about the first. Every sentence of it — the silent
+replacement of a true claim, the loss of trust in the parts still right, why a confidence
+threshold is the wrong shape — describes a system that picks a winner. None of it argues
+against writing "these two disagree" into the page.
+
+So the ladder gained one rung, `everything`, and what it applies is a *record*: one
+`append_block` placed directly after the contradicted sentence, carrying the competing
+claim and its source, marked as a conflict. The existing sentence is not edited, struck
+or archived. The operation inverts by removing one block.
+
+**What is unchanged.** The system still never resolves a contradiction, at any setting.
+No level edits a sentence on the strength of a source that disagrees with it. Below
+`everything` the behaviour is exactly as described above, and `everything` must be typed
+in full — it is not reachable by degrees.
+
+**What this costs.** A wrong `contradicts` now puts a red callout in a page you did not
+ask to have marked up. That is visible, cited and reversible in one tap, but it is still
+your notes being written in by a machine that was wrong. The confidence floor applies —
+an unsure contradiction still waits — so the failure needs the classifier to be
+confidently wrong, which the eval measures at 100% recall and 100% precision on the
+committed fixture and cannot promise on yours.
+
+**Why it was made.** Asked for explicitly, twice, by the person whose notes these are,
+alongside two conditions that change the calculus: every action is undoable by a human,
+and every action is listed in one place. Autonomy is safe in proportion to how cheap it
+is to reverse. The original decision was written for a system with no activity log and no
+undo button in the interface; both now exist.
+
+## Revisit if
+
+Contradiction precision on a real workspace falls below the fixture's, or a user reports
+a red callout on a page where the two claims did not actually conflict. The rung is
+opt-in, so the remedy is a better default rather than a removed capability.

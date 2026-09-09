@@ -27,13 +27,24 @@ def test_contradicts_is_never_auto_appliable():
             assert relation.auto_appliable is True
 
 
-def test_autonomy_has_no_level_that_covers_contradictions():
-    """There is deliberately no `autonomy=high`; the enum cannot express it."""
+def test_only_the_top_level_admits_contradictions_and_it_must_be_asked_for():
+    """Every level below `everything` refuses the contradiction tier.
+
+    The ladder used to stop before contradictions entirely. It now has one more rung,
+    reached only by spelling it out — and what that rung applies is a *record* of the
+    disagreement, never a resolution of it. The test that this is still true lives in
+    tests/unit/test_safety.py, where it belongs.
+    """
     from palimpsest.config import AUTONOMY_LEVELS
 
+    for name, allowed in AUTONOMY_LEVELS.items():
+        if name == "everything":
+            continue
+        assert Relation.CONTRADICTS.risk not in allowed, name
+
+    assert Relation.CONTRADICTS.risk in AUTONOMY_LEVELS["everything"]
+    # No alias, no near-miss: the one level that can do this has one spelling.
     assert "high" not in AUTONOMY_LEVELS
-    for allowed in AUTONOMY_LEVELS.values():
-        assert Relation.CONTRADICTS.risk not in allowed
 
 
 def test_apply_and_autonomy_are_independent_switches():

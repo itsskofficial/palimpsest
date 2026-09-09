@@ -13,7 +13,16 @@ import { api, subscribe, type Approval, type JobEvent } from "@/lib/api";
  * screen is the point. The product's promise is "drop something in and watch your notes
  * change"; splitting the watching from the deciding would break that into two chores.
  */
-export function ActivityFeed({ refreshKey }: { refreshKey: number }) {
+export function ActivityFeed({
+  refreshKey,
+  limit,
+  onSeeAll,
+}: {
+  refreshKey: number;
+  /** How many captures to show. The home page passes 1 — see the note in `page.tsx`. */
+  limit?: number;
+  onSeeAll?: () => void;
+}) {
   const [jobs, setJobs] = useState<Record<string, JobEvent>>({});
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [live, setLive] = useState(false);
@@ -57,7 +66,9 @@ export function ActivityFeed({ refreshKey }: { refreshKey: number }) {
     });
   }, [loadAll]);
 
-  const rows = Object.values(jobs);
+  const all = Object.values(jobs);
+  const rows = limit ? all.slice(0, limit) : all;
+  const hidden = all.length - rows.length;
   const pending = approvals.length;
 
   if (!rows.length && !pending) return <Empty live={live} />;
@@ -65,7 +76,9 @@ export function ActivityFeed({ refreshKey }: { refreshKey: number }) {
   return (
     <section>
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="font-display text-lg text-ink">Activity</h2>
+        <h2 className="font-display text-lg text-ink">
+          {limit ? "Latest" : "Activity"}
+        </h2>
         <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
           <motion.span
             animate={live ? { opacity: [0.35, 1, 0.35] } : { opacity: 0.3 }}
@@ -106,6 +119,15 @@ export function ActivityFeed({ refreshKey }: { refreshKey: number }) {
           ))}
         </AnimatePresence>
       </ol>
+
+      {hidden > 0 && onSeeAll && (
+        <button
+          onClick={onSeeAll}
+          className="mt-4 font-mono text-[11px] uppercase tracking-[0.14em] text-faint transition hover:text-sepia"
+        >
+          {hidden} more in Activity &rarr;
+        </button>
+      )}
     </section>
   );
 }

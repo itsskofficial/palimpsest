@@ -117,14 +117,13 @@ def test_only_two_tools_can_write_and_both_are_gated(ctx):
     assert {t.name for t in writers} == {"apply_patch", "undo_patch"}
 
 
-def test_no_autonomy_level_admits_the_contradiction_tier():
-    """The invariant itself, rather than a proxy for it.
+def test_only_the_top_level_admits_the_contradiction_tier():
+    """Which levels may act on a contradiction at all.
 
-    This test used to assert that the ladder stopped at `medium`, which was really a
-    stand-in for "there is no setting that auto-applies contradictions". Adding a `full`
-    level for people who want everything else automatic broke the proxy without touching
-    the property, so the property is now asserted directly: for *every* level that
-    exists, present or future, the high-risk tier is refused.
+    Contradictions were once refused at every setting. They are now allowed at exactly
+    one, `everything`, which an operator has to spell out — and what it does is pinned
+    separately below, because "may act" and "may decide" are different powers and only
+    the first was granted.
     """
     from palimpsest.config import AUTONOMY_LEVELS, NEVER_AUTOMATIC
     from palimpsest.types import Relation
@@ -134,13 +133,118 @@ def test_no_autonomy_level_admits_the_contradiction_tier():
     assert Relation.CONTRADICTS.auto_appliable is False
 
     for level in AUTONOMY_LEVELS:
+        if level == "everything":
+            continue
         assert "high" not in AUTONOMY_LEVELS[level], level
         assert Settings(apply=True, autonomy=level).may_auto_apply("high") is False, level
 
+    assert Settings(apply=True, autonomy="everything").may_auto_apply("high") is True
+    # Still gated by the other switch: autonomy alone never writes.
+    assert Settings(apply=False, autonomy="everything").may_auto_apply("high") is False
+
     # And no level may be invented at the boundary by spelling it optimistically.
-    for wishful in ("high", "all", "yolo", "everything"):
+    for wishful in ("high", "all", "yolo", "max"):
         with pytest.raises(ValueError):
             Settings(autonomy=wishful).validate()
+
+
+def test_recording_a_contradiction_never_edits_the_sentence_it_disagrees_with():
+    """The property that makes the top rung offerable at all.
+
+    The system does not decide which of two sourced claims is true — not at any setting,
+    including this one. What it applies is one append: the competing claim, its source,
+    and a marker that it conflicts with the line above. The existing sentence is not
+    edited, struck, or archived, so the whole thing inverts by removing one block and a
+    reader who disagrees with the machine loses nothing by undoing it.
+
+    If this test ever fails, autonomy has quietly grown from "record the argument" into
+    "settle the argument", which is a different product.
+    """
+    from palimpsest.plan import plan
+    from palimpsest.types import Claim, ClaimType, Judgement, Source, new_id
+
+    claim = Claim(claim_id=new_id("clm_"), text="Per-parameter clipping is better.",
+                  type=ClaimType.FACT, topics=("optimisation",))
+    judgement = Judgement(claim_id=claim.claim_id, relation=Relation.CONTRADICTS,
+                          confidence=0.95, target_block_id="bk1",
+                          target_page_id="pg_a",
+                          existing_text="Global-norm clipping is the standard remedy.",
+                          rationale="the two cannot both hold", model="fake")
+    source = Source(source_id=new_id("src_"), kind="url", title="A blog post",
+                    text=claim.text)
+
+    result = plan([judgement], {claim.claim_id: claim}, source, _PlanStore(),
+                  record_contradictions=True)
+
+    assert len(result.patch) == 1
+    op = result.patch.operations[0]
+    assert op.kind is OpKind.APPEND_BLOCK
+    assert op.relation is Relation.CONTRADICTS
+    # Appended to the page, positioned after the sentence it argues with. Notion rejects
+    # an append whose anchor is not a child of the target, so these must differ.
+    assert op.target == "pg_a"
+    assert op.payload["after_block_id"] == "bk1"
+    assert op.payload["contradicts_block_id"] == "bk1"
+
+    # Anything that changes or removes existing prose. The whole claim of this rung is
+    # that none of these can be reached by a contradiction.
+    destructive = {OpKind.UPDATE_TEXT, OpKind.STRIKE_BLOCK, OpKind.ARCHIVE_BLOCK}
+    assert not [o for o in result.patch.operations if o.kind in destructive]
+
+    # The competing claim and the source it came from both reach the page.
+    body = str(op.payload["children"])
+    assert "Per-parameter clipping is better." in body
+    assert "A blog post" in body
+
+
+def test_a_contradiction_below_the_confidence_bar_still_waits_for_a_human():
+    """Writing "these two disagree" into someone's notes is only worth doing when we
+    believe it. An unsure contradiction goes to review at every setting, including the
+    top one."""
+    from palimpsest.plan import plan
+    from palimpsest.types import Claim, ClaimType, Judgement, Source, new_id
+
+    claim = Claim(claim_id=new_id("clm_"), text="Maybe the opposite is true.",
+                  type=ClaimType.FACT, topics=())
+    judgement = Judgement(claim_id=claim.claim_id, relation=Relation.CONTRADICTS,
+                          confidence=0.4, target_block_id="bk1",
+                          rationale="not sure", model="fake")
+    source = Source(source_id=new_id("src_"), kind="text", title="t", text=claim.text)
+
+    result = plan([judgement], {claim.claim_id: claim}, source, _PlanStore(),
+                  record_contradictions=True)
+
+    assert len(result.patch) == 0
+    assert [item["reason"] for item in result.review] == ["contradiction"]
+
+
+def test_contradictions_still_wait_below_the_top_level(ctx):
+    """The default posture is unchanged. Someone who has not asked for `everything` sees
+    exactly what they saw before."""
+    from palimpsest.plan import plan
+    from palimpsest.types import Claim, ClaimType, Judgement, Source, new_id
+
+    claim = Claim(claim_id=new_id("clm_"), text="The opposite is true.",
+                  type=ClaimType.FACT, topics=())
+    judgement = Judgement(claim_id=claim.claim_id, relation=Relation.CONTRADICTS,
+                          confidence=0.99, target_block_id="bk1",
+                          rationale="conflict", model="fake")
+    source = Source(source_id=new_id("src_"), kind="text", title="t", text=claim.text)
+
+    result = plan([judgement], {claim.claim_id: claim}, source, ctx.store)
+
+    assert len(result.patch) == 0
+    assert result.review[0]["reason"] == "contradiction"
+
+
+class _PlanStore:
+    """The planner reads page titles and roles; nothing else is needed here."""
+
+    def get_page(self, page_id):
+        return None
+
+    def get_block(self, block_id):
+        return None
 
 
 def test_full_autonomy_applies_everything_except_contradictions():
@@ -255,5 +359,48 @@ def test_a_failed_classification_never_reaches_notion_even_at_full_autonomy(ctx)
     out = approval.gate(ctx.store, result.patch,
                         Settings(apply=True, autonomy="full", notion_token="ntn_x"),
                         notion_factory=lambda: notion)
+    assert out["applied"] == 0
+    assert notion.writes == []
+
+
+def test_the_gate_and_the_settings_screen_never_disagree(ctx):
+    """One authority for "may this apply", not two.
+
+    The gate used to consult the autonomy setting *and* separately short-circuit on the
+    relation. That was correct while no setting could ever permit a contradiction, and
+    became a silent lie the moment one could: the settings screen said the top rung
+    records disagreements, and the gate blocked them anyway. A gate that disagrees with
+    the switch the operator just moved is worse than a strict gate, because they stop
+    believing either.
+    """
+    from palimpsest import approval
+
+    patch = _patch(_op(Relation.CONTRADICTS))
+    ctx.store.put_patch(patch)
+    notion = FakeNotion()
+
+    out = approval.gate(
+        ctx.store, patch,
+        Settings(apply=True, autonomy="everything", notion_token="ntn_x"),
+        notion_factory=lambda: notion)
+
+    assert out["blocked"] == 0
+    assert out["applied"] == 1
+    assert notion.writes                      # it really reached Notion
+
+
+def test_the_top_rung_still_needs_writing_to_be_switched_on(ctx):
+    """Two switches, still independent. `everything` is not a way around `apply=off`."""
+    from palimpsest import approval
+
+    patch = _patch(_op(Relation.CONTRADICTS))
+    ctx.store.put_patch(patch)
+    notion = FakeNotion()
+
+    out = approval.gate(
+        ctx.store, patch,
+        Settings(apply=False, autonomy="everything", notion_token="ntn_x"),
+        notion_factory=lambda: notion)
+
     assert out["applied"] == 0
     assert notion.writes == []

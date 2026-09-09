@@ -215,6 +215,7 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
     planned: PlanResult = plan(
         classified.judgements, {c.claim_id: c for c in claims}, source, store,
         min_confidence=getattr(settings, "min_confidence", 0.75),
+        record_contradictions=getattr(settings, "autonomy", "none") == "everything",
         footnotes=getattr(settings, "footnotes", True),
         default_parent=(getattr(settings, "notion_root_pages", ()) or (None,))[0],
     )
