@@ -37,7 +37,8 @@ __all__ = ["PASS_MRR", "PASS_RECALL", "run"]
 PASS_RECALL = 0.90
 
 #: How far down the list the right page sits, on average. 1.0 means always first.
-PASS_MRR = 0.75
+#: Ratcheted from 0.75 once the fixture stopped being uniformly first-place.
+PASS_MRR = 0.85
 
 #: Where the shortlist is cut. Matches the pipeline's own default for `pages_for`.
 K = 6

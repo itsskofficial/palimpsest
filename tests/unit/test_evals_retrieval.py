@@ -29,12 +29,18 @@ def test_retrieval_clears_its_bar_on_the_committed_workspace(store):
 
 
 def test_the_thresholds_are_a_floor_the_current_numbers_clear_comfortably(store):
-    """A bar set exactly at today's score fails on noise; one set far below it measures
-    nothing. These are the numbers as measured, minus a little room."""
+    """A bar set exactly at today's score fails on noise; one far below it measures
+    nothing. These are the numbers as measured, with a little room.
+
+    MRR is not 1.0 and should not be forced to be. One case ranks the reading list above
+    the serving page, because the reading list genuinely mentions the topic — that is the
+    fixture being realistic rather than the ranking being wrong, and an assertion pinned
+    to 1.0 would punish every future case that adds honest clutter.
+    """
     metrics = retrieval.run(store)
 
     assert metrics[f"recall_at_{metrics['k']}"] == 1.0
-    assert metrics["mrr"] == 1.0
+    assert metrics["mrr"] >= 0.9
 
 
 def test_every_case_names_the_property_it_tests(store):

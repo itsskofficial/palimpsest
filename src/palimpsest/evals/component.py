@@ -30,10 +30,19 @@ __all__ = ["run"]
 #: How much more a contradiction miss counts than any other error, in the headline.
 CONTRADICTION_RECALL_WEIGHT = 3.0
 
-#: A run passes only if every relation clears this, and contradiction recall clears the
+#: A run passes only if the headline clears this and contradiction recall clears the
 #: stricter bar below. Deliberately conservative — these gate autonomy.
 PASS_F1 = 0.7
 PASS_CONTRADICTION_RECALL = 0.9
+
+#: How many examples a relation needs before its own F1 is allowed to fail a run.
+#:
+#: An F1 computed from three examples takes values in steps of about 0.2, so gating on it
+#: measures the sample as much as the classifier: one arguable case moves a relation from
+#: pass to fail and back. Below this bar the per-relation number is still computed and
+#: still printed — it is the first thing to look at — but the run is judged on the
+#: weighted headline and on contradiction recall, both of which aggregate.
+MIN_SUPPORT_TO_GATE = 5
 
 
 def run(store, model, index, *, effort: str = "high",
@@ -106,13 +115,20 @@ def _metrics(confusion: dict[str, dict[str, int]]) -> dict:
 
 
 def _passed(metrics: dict) -> bool:
-    if metrics.get("contradiction_recall", 0) < PASS_CONTRADICTION_RECALL:
-        # Only fail on this when there were contradictions to catch.
-        contra = metrics["per_relation"].get("contradicts", {})
-        if contra.get("support", 0) > 0:
-            return False
+    """Contradiction recall, then the headline, then any relation with enough examples.
+
+    Contradiction recall is checked first and on its own because it is the one number
+    that is a policy rather than a target: a classifier that misses contradictions is not
+    a classifier that needs tuning, it is one that must not be trusted with autonomy.
+    """
+    contra = metrics["per_relation"].get("contradicts", {})
+    if (contra.get("support", 0) > 0
+            and metrics.get("contradiction_recall", 0) < PASS_CONTRADICTION_RECALL):
+        return False
+    if metrics.get("weighted_f1", 0) < PASS_F1:
+        return False
     return all(m["f1"] >= PASS_F1 for m in metrics["per_relation"].values()
-               if m["support"] > 0)
+               if m["support"] >= MIN_SUPPORT_TO_GATE)
 
 
 def _claim_type(value: str) -> ClaimType:

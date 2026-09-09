@@ -212,3 +212,48 @@ def test_a_rejected_approval_cannot_later_be_approved(ctx):
     approval.resolve(ctx.store, aid, "rejected", by="sk", notion_factory=FakeNotion)
     after = approval.resolve(ctx.store, aid, "approved", by="sk", notion_factory=FakeNotion)
     assert not after["ok"]
+
+
+# ---------------------------------------------------------------------------
+# a classification that did not happen must not become an edit
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_classification_never_reaches_notion_even_at_full_autonomy(ctx):
+    """The floor that makes `full` autonomy safe to offer at all.
+
+    When the model is unreachable — a wrong model id, an outage, an exhausted quota —
+    `classify_one` returns `NEW` at confidence 0.0 rather than raising, so one bad claim
+    cannot abort a whole source. `NEW` is the lowest risk tier, so the autonomy ladder
+    alone would happily apply it, and a provider outage would quietly append every claim
+    in the queue to your notes as fresh prose.
+
+    What actually stops that is the confidence floor in `plan`: a judgement below
+    `min_confidence` becomes a review item and never becomes an operation at all. This
+    pins the two halves together, because each is harmless-looking on its own.
+    """
+    from palimpsest import plan as plan_mod
+    from palimpsest.types import Claim, ClaimType, Judgement, Source, new_id
+
+    claim = Claim(claim_id=new_id("clm_"), text="Something the model never judged.",
+                  type=ClaimType.FACT, topics=("x",))
+    source = Source(source_id=new_id("src_"), kind="text", title="t", text=claim.text)
+    failed = Judgement(claim_id=claim.claim_id, relation=Relation.NEW, confidence=0.0,
+                       target_page_id="pg_a", rationale="classification failed",
+                       model="error")
+
+    result = plan_mod.plan([failed], {claim.claim_id: claim}, source, ctx.store)
+
+    assert len(result.patch) == 0, "a failed classification produced an operation"
+    assert [item["reason"] for item in result.review] == ["low_confidence"]
+
+    # And with nothing in the patch, the gate at full autonomy has nothing to apply.
+    notion = FakeNotion()
+    from palimpsest import approval
+
+    ctx.store.put_patch(result.patch)
+    out = approval.gate(ctx.store, result.patch,
+                        Settings(apply=True, autonomy="full", notion_token="ntn_x"),
+                        notion_factory=lambda: notion)
+    assert out["applied"] == 0
+    assert notion.writes == []

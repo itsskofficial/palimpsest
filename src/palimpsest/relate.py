@@ -64,11 +64,26 @@ best-scoring one. Say which page in `target_page_id`.
 cannot be true. NEVER choose this merely because the claim is new, more detailed, or \
 differently worded — only when they genuinely conflict.
 
+Two checks first, in this order. Both are about WHERE the match is, and skipping them \
+is how `duplicate` and `extends` get mistaken for their easier neighbours.
+
+1. Does the same substance appear on MORE THAN ONE candidate page, or on a page that is \
+not where this claim belongs? Then it is `duplicate`. Adding a citation to one copy \
+leaves the split in place, and the split is the problem.
+2. Is the best-matching block on a page whose role is `index`, `reference` or a list of \
+open questions, while this claim is a finding or an explanation? Then the best match is \
+not its home. Choose `extends` and name the right page in `target_page_id`. An answer \
+does not belong on the page that asked the question.
+
 Guidance:
-- Prefer `corroborates` over `new` when the substance is already present. Avoiding \
-duplicate prose is more valuable than capturing a nicer phrasing.
+- Prefer `corroborates` over `new` when the substance is already present on the page \
+where it belongs. Avoiding duplicate prose is more valuable than capturing a nicer \
+phrasing.
 - Prefer `new` over `refines` when you are unsure the candidate is really about the \
 same thing. A wrong `refines` edits a sentence that was fine.
+- `refines` and `supersedes` both EDIT an existing sentence, so only choose them when \
+the claim is about that same sentence and belongs on that same page. If it belongs \
+elsewhere, it is `extends`.
 - `contradicts` is the most consequential answer and always goes to a human. Use it \
 when it is true, and only then.
 - `target_block_id` is required for corroborates, refines, supersedes, duplicate and \
@@ -188,13 +203,26 @@ def _shortcut(claim: Claim, candidates: list[Candidate], pages: list[PageHit],
 
 
 def _render_candidates(candidates: list[Candidate], pages: list[PageHit]) -> str:
+    """Lay out the neighbourhood, with each block's page role beside it.
+
+    The role is on the block lines and not only in the page list because two of the
+    seven relations turn on *where* the match sits rather than on what it says. A claim
+    whose best match is a line on an index page is not a claim that refines that line —
+    it belongs somewhere else. Measured behaviour before this: `extends` was answered
+    `refines` every time, because the model could see the matching text and had to join
+    two separate parts of the prompt to notice the page it was on was a question list.
+    """
+    roles = {p.page_id: p.role for p in pages}
     lines = ["EXISTING BLOCKS (candidates for corroborate / refine / supersede / "
              "duplicate / contradict)"]
     if not candidates:
         lines.append("  (none)")
     for c in candidates:
-        lines.append(f"  - block_id: {c.block_id}\n    page: {c.page_title} "
-                     f"({c.page_id})\n    text: {c.text[:600]}")
+        role = roles.get(c.page_id)
+        where = f"{c.page_title} ({c.page_id}"
+        where += f", role: {role})" if role else ")"
+        lines.append(f"  - block_id: {c.block_id}\n    page: {where}"
+                     f"\n    text: {c.text[:600]}")
     lines.append("")
     lines.append("CANDIDATE PAGES (for new / extends)")
     if not pages:
