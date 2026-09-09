@@ -205,6 +205,7 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
 
     t0 = time.perf_counter()
     classified = classify(claims, source, index, model,
+                          workers=getattr(settings, "classify_workers", 8),
                           effort=getattr(settings, "classify_effort", "high"),
                           top_pages=getattr(settings, "max_candidates", 8))
     store.put_judgements(classified.judgements)

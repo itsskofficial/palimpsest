@@ -23,6 +23,7 @@ repair path rather than the real one.
 from __future__ import annotations
 
 import re
+import threading
 
 import pytest
 
@@ -62,6 +63,12 @@ class FakeModel:
     `json` dispatches on `task`, which is how `extract` and `relate` are distinguished
     everywhere else in the codebase, and it counts its calls per task so a test can
     assert that a stage was skipped rather than merely that its output was reused.
+
+    The lock is not decoration. Claims are classified concurrently, so this fake is
+    called from several threads at once, and `self.calls[task] = ... + 1` is a
+    read-modify-write that loses increments under contention. That produced a test which
+    failed roughly one run in eight — the worst kind, because it looks like a real
+    intermittent bug in the pipeline rather than a counter in the test double.
     """
 
     model = "fake/offline-1"
@@ -73,10 +80,12 @@ class FakeModel:
         self.judgement = judgement or {}
         self.calls: dict[str, int] = {}
         self.usage = Usage()
+        self._lock = threading.Lock()
 
     def json(self, *, task, system, prompt, schema, effort="high",
              cache_prefix=None, max_tokens=None):
-        self.calls[task] = self.calls.get(task, 0) + 1
+        with self._lock:
+            self.calls[task] = self.calls.get(task, 0) + 1
         self.usage.add(task, TokenUsage(input=900, output=120), 0.01)
         if task == "extract":
             return {"claims": [dict(c) for c in self.claims]}

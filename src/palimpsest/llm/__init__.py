@@ -35,6 +35,7 @@ with the same shape whoever served it.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -96,15 +97,21 @@ class Usage:
     refusals: int = 0
     seconds: float = 0.0
     by_task: dict[str, int] = field(default_factory=dict)
+    #: Claims are classified concurrently, so several threads reach `add` at once and
+    #: `self.calls += 1` is a read-modify-write that quietly loses increments under
+    #: contention. The numbers this guards are the ones printed as "what did this cost",
+    #: so an undercount is a bill that looks smaller than it was.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def add(self, task: str, usage: TokenUsage, seconds: float) -> None:
-        self.calls += 1
-        self.seconds += seconds
-        self.by_task[task] = self.by_task.get(task, 0) + 1
-        self.input_tokens += usage.input
-        self.output_tokens += usage.output
-        self.cache_read += usage.cache_read
-        self.cache_write += usage.cache_write
+        with self._lock:
+            self.calls += 1
+            self.seconds += seconds
+            self.by_task[task] = self.by_task.get(task, 0) + 1
+            self.input_tokens += usage.input
+            self.output_tokens += usage.output
+            self.cache_read += usage.cache_read
+            self.cache_write += usage.cache_write
 
     def cost_usd(self, model: str, base_url: str | None = None) -> float | None:
         """Estimated spend, or `None` when this model's price is not published."""

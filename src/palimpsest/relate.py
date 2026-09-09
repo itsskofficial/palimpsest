@@ -30,6 +30,7 @@ explicitly-invoked function that lays out both sides — it never picks a winner
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,14 @@ from palimpsest.types import Claim, Judgement, Relation, Source
 __all__ = ["ClassifyResult", "adjudicate", "classify", "classify_one"]
 
 log = logging.getLogger("palimpsest.relate")
+
+#: How many claims are classified at once.
+#:
+#: Chosen against the provider's rate limit rather than the machine's
+#: cores — the work is entirely waiting on HTTP. Eight turns a long
+#: article from minutes into something you can watch happen, and stays
+#: well inside the burst allowance of every provider tested.
+DEFAULT_WORKERS = 8
 
 SYSTEM = """\
 You maintain a personal knowledge base. For one new claim from a source, decide how it \
@@ -340,20 +349,52 @@ def classify_one(claim: Claim, source: Source, index: Index, model: Model, *,
 
 def classify(claims: list[Claim], source: Source, index: Index, model: Model, *,
              effort: str = "high", top_blocks: int = 8, top_pages: int = 5,
-             ) -> ClassifyResult:
-    """Classify every claim from a source."""
+             workers: int = DEFAULT_WORKERS) -> ClassifyResult:
+    """Classify every claim from a source, several at a time.
+
+    One claim, one model call, and a long article yields eighty of them. Run in sequence
+    that is eleven minutes for a Wikipedia page — long enough that the product feels
+    broken, and far too long to show anyone. The calls are independent by construction:
+    each claim is judged against the same index, which is immutable for the duration, and
+    nothing a claim decides affects another. Nothing was being ordered by the loop except
+    the loop.
+
+    Order is restored afterwards rather than given up. Judgements come back in the order
+    the claims arrived, so a patch built from them is deterministic and two runs over the
+    same source are comparable — which the evals depend on.
+
+    `workers` is deliberately modest. The ceiling here is the provider's rate limit, not
+    the machine, and a burst of sixty concurrent requests is the fastest way to turn a
+    slow ingest into a failed one.
+    """
     result = ClassifyResult()
     before = model.usage.calls
-    for claim in claims:
+    if not claims:
+        return result
+
+    def judge(claim: Claim) -> Judgement | None:
         try:
-            judgement = classify_one(claim, source, index, model, effort=effort,
-                                     top_blocks=top_blocks, top_pages=top_pages)
+            return classify_one(claim, source, index, model, effort=effort,
+                                top_blocks=top_blocks, top_pages=top_pages)
         except Exception as e:
+            # Recorded against the claim rather than raised: one unclassifiable claim
+            # must not cost the other seventy-nine.
             result.errors.append(f"{claim.claim_id}: {e}")
+            return None
+
+    if workers <= 1 or len(claims) == 1:
+        judgements = [judge(claim) for claim in claims]
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(claims))) as pool:
+            judgements = list(pool.map(judge, claims))
+
+    for judgement in judgements:
+        if judgement is None:
             continue
         if judgement.model == "heuristic":
             result.shortcut += 1
         result.judgements.append(judgement)
+
     result.model_calls = model.usage.calls - before
     return result
 

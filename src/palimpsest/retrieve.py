@@ -148,6 +148,12 @@ class Index:
         self._lengths: list[int] = []
         self._avg_len = 1.0
         self._pages: dict[str, dict] = {}
+        #: Backlinks, loaded once at build time rather than queried per lookup. The
+        #: index describes itself as in-memory and was not quite: `pages_for` reached
+        #: into the store for every seed page, which is a database round trip inside a
+        #: ranking loop and — once claims were classified concurrently — a second thread
+        #: using the connection while the first iterated its results.
+        self._backlinks: dict[str, list[str]] = {}
         self._vectors: dict[str, list[float]] = {}
         self._terms: list[Counter[str]] = []
         self.build()
@@ -183,6 +189,7 @@ class Index:
                 self._postings[term].append((doc, count))
                 self._df[term] += 1
 
+        self._backlinks = {pid: list(self.store.backlinks(pid)) for pid in self._pages}
         self._avg_len = (sum(self._lengths) / len(self._lengths)) if self._lengths else 1.0
         log.debug("index built: %d block(s), %d term(s)", len(self._blocks), len(self._df))
         return self
@@ -395,7 +402,7 @@ class Index:
             # words do not match — that is what a knowledge graph is for.
             seeds = sorted(per_page.items(), key=lambda kv: kv[1], reverse=True)[:3]
             for pid, score in seeds:
-                for neighbour in self.store.backlinks(pid):
+                for neighbour in self._backlinks.get(pid, ()):
                     if neighbour in self._pages:
                         per_page[neighbour] += score * BACKLINK_SHARE
 

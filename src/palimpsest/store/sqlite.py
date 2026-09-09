@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,8 @@ class SQLiteStore:
         # write lock at once. Without a busy timeout that is an immediate
         # "database is locked" rather than a wait of a few milliseconds.
         self.conn.execute("PRAGMA busy_timeout=5000")
+        # Everything from here on goes through the guard. See `_Guarded` for why.
+        self.conn = _Guarded(self.conn)  # type: ignore[assignment]
         self.migrate()
 
     # -- schema ----------------------------------------------------------------
@@ -829,3 +832,82 @@ class SQLiteStore:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+class _Guarded:
+    """A sqlite3 connection that serialises access and never hands out a live cursor.
+
+    The connection is opened with `check_same_thread=False` so the queue worker and the
+    web handlers can share one store, which was fine while nothing ran two queries at
+    once. Classifying claims concurrently broke that assumption, and it broke it
+    *quietly*: `conn.execute` returns a cursor bound to the connection, so a second
+    thread executing while the first is still iterating its results gets a cursor whose
+    state has moved underneath it. No exception — just the wrong rows, or none.
+
+    What that looked like from the outside: one claim in twenty came back with an empty
+    retrieval, took the "nothing matched, so this is new" shortcut without a model call,
+    and produced no operation. A test that failed once every twenty runs, in a place with
+    no visible connection to threading.
+
+    Two rules, both load-bearing. Every statement runs under the lock, and every result
+    is *materialised* inside it — `fetchall()` before releasing — so no caller can be
+    iterating a cursor while another thread uses the connection.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        # Reentrant: a method that holds the lock may call another that takes it.
+        self._lock = threading.RLock()
+
+    @property
+    def row_factory(self):  # pragma: no cover - passthrough
+        return self._conn.row_factory
+
+    @row_factory.setter
+    def row_factory(self, value) -> None:
+        self._conn.row_factory = value
+
+    def execute(self, sql: str, params: Any = ()) -> _Rows:
+        with self._lock:
+            cursor = self._conn.execute(sql, params)
+            return _Rows(cursor.fetchall(), cursor.rowcount, cursor.lastrowid)
+
+    def executemany(self, sql: str, seq: Any) -> _Rows:
+        with self._lock:
+            cursor = self._conn.executemany(sql, seq)
+            return _Rows([], cursor.rowcount, cursor.lastrowid)
+
+    def executescript(self, script: str) -> None:
+        with self._lock:
+            self._conn.executescript(script)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+
+class _Rows:
+    """Already-fetched rows, shaped like the cursor the callers used to get."""
+
+    __slots__ = ("_rows", "lastrowid", "rowcount")
+
+    def __init__(self, rows: list, rowcount: int = -1, lastrowid: int | None = None):
+        self._rows = rows
+        self.rowcount = rowcount
+        self.lastrowid = lastrowid
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list:
+        return self._rows
