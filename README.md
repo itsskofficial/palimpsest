@@ -87,8 +87,12 @@ argues with, both sources cited, the original sentence untouched. One append, on
 inverse, one tap to undo. Deciding stays yours.
 
 **Every edit is typed, small, and exactly reversible.** `add_citation`, `update_text`,
-`insert_footnote`, `strike_block`, `merge_pages` — there is no `rewrite_page` in the
-vocabulary, because an operation you cannot render as a diff is one you cannot review.
+`insert_footnote`, `strike_block`, `archive_block`, `create_page`, `link_pages`,
+`move_page`, `rename_page`, `set_icon` — that is the complete list. There is no
+`rewrite_page`, because an operation you cannot render as a diff is one you cannot
+review, and **there is no delete**: the Notion client has no `DELETE` verb at all.
+The most destructive thing in the vocabulary is a strike-through, which leaves the
+words on the page.
 
 ---
 
