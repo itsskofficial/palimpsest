@@ -13,11 +13,16 @@ htmlcov/
 .DS_Store
 results/*.log
 
-# the browser extension and desktop app
+# the browser extension, desktop app and web UI
 node_modules/
 clients/desktop/out/
 clients/desktop/dist/
 clients/extension/*.zip
+clients/ui/.next/
+clients/ui/*.tsbuildinfo
+# `clients/ui/out/` is a build artifact; the copy that ships lives in
+# src/palimpsest/serve/static/, which is committed so a pip install needs no Node.
+clients/ui/out/
 
 # local platform artifacts
 archive/

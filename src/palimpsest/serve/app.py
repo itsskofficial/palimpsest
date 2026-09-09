@@ -222,6 +222,7 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
     from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
     from palimpsest.serve.middleware import Metrics, install
+    from palimpsest.serve.ui_api import register as register_ui
     from palimpsest.serve.upload import register as register_uploads
 
     st = state or AppState(**kwargs)
@@ -282,7 +283,12 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def home():
-        return (static / "index.html").read_text(encoding="utf-8")
+        index = static / "index.html"
+        if not index.is_file():  # pragma: no cover - only if the UI was not shipped
+            return HTMLResponse(
+                "<h1>palimpsest</h1><p>The interface was not built into this install. "
+                "The API is running at <a href='/docs'>/docs</a>.</p>", status_code=200)
+        return index.read_text(encoding="utf-8")
 
     @app.get("/v1/status", tags=["meta"])
     def status():
@@ -406,6 +412,9 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
         return job
 
     register_uploads(app, st)
+    # Everything the desktop UI needs: onboarding, settings, approvals,
+    # an agent turn, and the live event stream.
+    register_ui(app, st)
 
     @app.get("/v1/patches", tags=["pipeline"])
     def patches(status: str | None = None, limit: int = Query(50, le=500)):
@@ -547,5 +556,14 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
     @app.exception_handler(ValueError)
     def value_error_handler(_request, exc: ValueError):  # pragma: no cover - defensive
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    # The built interface. Mounted last and at an exact prefix so it can never shadow an
+    # API route — Next puts every hashed asset under `_next/`, and nothing else needs
+    # serving, so a narrow mount is safer than a catch-all at "/".
+    assets = static / "_next"
+    if assets.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/_next", StaticFiles(directory=str(assets)), name="ui-assets")
 
     return app

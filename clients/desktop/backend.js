@@ -1,12 +1,17 @@
 /**
  * Finding a Python, building a venv in it, and keeping `palimpsest serve` alive.
  *
- * The app is a capture surface in front of a Python service. That service is not
- * bundled — it is installed into a virtualenv under the app's data directory using the
- * Python already on the machine. The trade is deliberate: a bundled runtime would make
- * the installer work anywhere, and it would also mean this app ships a *second* copy of
- * palimpsest that drifts from the one you edit and run from the terminal. Sharing one
- * checkout means a change you make is live in the desktop app the next time it starts.
+ * The app is a window onto a Python service. That service is not bundled — it is
+ * installed into a virtualenv under the app's data directory using the Python already on
+ * the machine. The trade is deliberate: a bundled runtime would make the installer work
+ * anywhere, and it would also mean this app ships a *second* copy of palimpsest that
+ * drifts from the one you run from the terminal. One install, one database, one set of
+ * keys, whichever way you came in.
+ *
+ * Where that install comes from depends on how the app was started. Run from a checkout,
+ * it installs the checkout editable, so a change you make is live next start. Run from
+ * the installer — where there is no checkout, only an asar — it installs the published
+ * `palimpsest-notion` release from PyPI.
  *
  * Three failure modes get explicit handling, because all three are common and all three
  * look identical from the outside if you do not:
@@ -33,6 +38,12 @@ const CANDIDATES = IS_WINDOWS
   : [["python3", []], ["python", []]];
 
 const MIN_PYTHON = [3, 10];
+
+/** The extras the desktop app needs: a model, an HTTP server, and the file readers. */
+const EXTRAS = "[anthropic,serve,pdf,tabular]";
+
+/** The published distribution. Not `palimpsest` — that name was already taken on PyPI. */
+const PACKAGE = "palimpsest-notion";
 
 export function findPython() {
   for (const [command, prefix] of CANDIDATES) {
@@ -67,6 +78,8 @@ export class Backend {
     this.adopted = false;
     this.restarts = 0;
     this.stopping = false;
+    /** True once the server has answered a health check at least once. */
+    this.ready = false;
   }
 
   get url() {
@@ -79,6 +92,22 @@ export class Backend {
 
   get installed() {
     return existsSync(this.python);
+  }
+
+  /**
+   * What `pip install` should be pointed at.
+   *
+   * A checkout is only a checkout if it has a `pyproject.toml`; inside a packaged app
+   * `repoRoot` resolves to somewhere in `resources/app.asar`, which pip cannot read and
+   * would fail on with a confusing error. Testing for the file rather than for
+   * `app.isPackaged` also means a developer running the packaged build against a real
+   * checkout gets the checkout, which is what they meant.
+   */
+  get target() {
+    const checkout = this.repoRoot && existsSync(join(this.repoRoot, "pyproject.toml"));
+    return checkout
+      ? { args: ["-e", `${this.repoRoot}${EXTRAS}`], what: "this checkout" }
+      : { args: [`${PACKAGE}${EXTRAS}`], what: `${PACKAGE} from PyPI` };
   }
 
   async alive() {
@@ -108,11 +137,10 @@ export class Backend {
       await this.#run(python.command, [...python.prefix, "-m", "venv", this.venvDir]);
     }
 
-    onProgress("Installing palimpsest and its dependencies…");
-    // `-e` so the app runs the checkout you edit rather than a frozen copy.
+    const { args, what } = this.target;
+    onProgress(`Installing ${what}…`);
     await this.#run(this.python, [
-      "-m", "pip", "install", "--disable-pip-version-check", "-q",
-      "-e", `${this.repoRoot}[anthropic,serve,pdf,tabular]`,
+      "-m", "pip", "install", "--disable-pip-version-check", "-q", ...args,
     ]);
     onProgress("Ready.");
   }
@@ -142,6 +170,7 @@ export class Backend {
     // file is a worse outcome than sharing one.
     if (await this.alive()) {
       this.adopted = true;
+      this.ready = true;
       this.log(`adopted an existing server on ${this.url}`);
       return { adopted: true, url: this.url };
     }
@@ -154,6 +183,7 @@ export class Backend {
     // Poll rather than trusting the process to be listening the moment it exists.
     for (let attempt = 0; attempt < 60; attempt += 1) {
       if (await this.alive()) {
+        this.ready = true;
         this.log(`server up on ${this.url}`);
         return { adopted: false, url: this.url };
       }

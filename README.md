@@ -9,17 +9,22 @@ proposes small, reversible, fully-cited edits to the right pages.
 > is still visible underneath.* That is the product: your notes get rewritten as you
 > learn, and every earlier layer stays readable.
 
+**Install the app** — [latest release](https://github.com/itsskofficial/palimpsest/releases/latest)
+— open it, and answer four questions. Or, if you would rather stay in a terminal:
+
 ```bash
 pip install "palimpsest-notion[all] @ git+https://github.com/itsskofficial/palimpsest.git"
 palimpsest serve
 ```
 
-That's the whole setup. On a fresh machine `serve` drops you into a short terminal
-wizard that asks for your Claude, Notion and Telegram keys, **checks each one on the
-spot**, makes the single Notion page it works inside for you, and pairs your Telegram
-account by watching for your first message. Answers are saved to a config file it reads
-on every later start — nothing to edit by hand. Then message the bot and start talking
-to your notes.
+Either way the setup is the same and it happens once. On a fresh machine you get a short
+wizard — a window in the app, a terminal prompt from `serve` — that asks for your Claude
+and Notion keys, **checks each one on the spot**, and makes the single Notion page it
+works inside for you. Answers go to a config file it reads on every later start, so there
+is nothing to edit by hand and no second copy to keep in sync. Telegram is offered at the
+end and can be skipped; turn it on later from Settings if you want your phone in the loop.
+
+Then drop something on the window, and watch what it proposes.
 
 Prefer the command line? Everything the bot does is also a command:
 
@@ -185,7 +190,7 @@ it **never hard-deletes** (strike-through and Notion's restorable trash only), a
 | `palimpsest sweep <kind>` | `duplicates` · `contradictions` · `stale` · `questions` |
 | `palimpsest telegram` | the bot: message it anything |
 | `palimpsest organise` | propose a shape for the workspace. **Writes nothing.** |
-| `palimpsest serve` | the review app on `:8100` |
+| `palimpsest serve` | the app on `:8100`, plus the API and the bot |
 | `palimpsest history <page_id>` | every applied change to a page |
 | `palimpsest provenance <block_id>` | which source produced this text |
 | `palimpsest status` | config, mirror size, and anything that looks wrong |
@@ -287,27 +292,70 @@ The golden set is a **test set, not training data** — nothing is fine-tuned. I
 for free from every approval you make, and it is the number the autonomy ladder is meant
 to rest on rather than being set by hand.
 
-## Capture surfaces
+## The app
 
-A Telegram bot, a browser extension, and a desktop app — all thin wrappers over the
-same queue:
+The window is the product. Three tabs, and the first one is the whole loop.
+
+**Capture.** A drop zone that takes files, pasted links, pasted text and dragged
+selections, above a live feed of everything in flight. The feed is one stream rather than
+a queue view and a review view, because "what is happening" and "what needs me" are the
+same question asked half a minute apart. A change waiting on you rises to the top in
+**rubric red** — the colour medieval scribes used for exactly what the reader must not
+skip — and the ones that landed on their own sit below it in aged copper.
+
+Each proposal shows the sentence it wants to write **over the top of the struck-through
+line it replaces**, which is the metaphor made literal and also the fastest way to judge
+an edit: you can see what you are about to lose. Relation, confidence and the model's
+one-line reasoning are on the card. Approve and Reject are the only two buttons.
+
+**Ask.** Questions answered from what you have actually written, with the pages cited.
+
+**Settings.** Keys, grouped by what they buy you and each checked when you paste it, and
+above them the two switches that decide whether anything reaches Notion at all — in
+plain language, not as `PALIMPSEST_AUTONOMY=medium` buried in a list. Contradictions are
+never applied automatically at any setting, and the panel says so where you set it.
+
+The same interface is served three ways from one build: `palimpsest serve` on
+`127.0.0.1:8100`, the installable app that wraps it, and the onboarding wizard on first
+run. There is no second implementation to drift.
+
+### The installable app
+
+The installer is an Electron shell around that server, so the app and the terminal share
+one database, one config file and one set of keys. It does not bundle Python: on first
+run it builds a virtualenv under its own data directory and installs `palimpsest-notion`
+into it, which keeps the download small and lets the engine be upgraded without
+reinstalling the shell.
+
+It also adds the one thing a browser tab cannot: **Ctrl+Shift+Space anywhere**, which
+opens a small box over whatever you are doing. Drop a file, paste a link, press Enter —
+the box is gone before the ingest starts, because the queue outlives the window.
 
 ```bash
-palimpsest telegram      # or just `palimpsest serve`, which starts it too
+cd clients/desktop && npm install && npm run dist   # build the installer yourself
 ```
 
-**The bot is the one you will use most.** Send it a link, a PDF, a voice note, a
-screenshot, or a paragraph you typed. Minutes later it tells you what changed: how many
-citations it added on its own, and what it wants you to decide — with the reasoning, and
+On Windows without developer mode, add `-c.win.signAndEditExecutable=false`: the signing
+toolchain unpacks symlinks Windows will not create unprivileged. CI builds all three
+platforms on tag.
+
+## Telegram, and the browser
+
+Optional, and both thin wrappers over the same queue.
+
+**Telegram** puts capture and approval on your phone. Send the bot a link, a PDF, a voice
+note, a screenshot or a paragraph; minutes later it tells you what changed — how many
+citations it added on its own, and what it wants you to decide, with the reasoning and
 Apply/Reject buttons.
 
-An allowlist is mandatory. A bot token is a bearer credential, so an unpaired chat is
-refused and told its own id; you add it and restart. There is deliberately no
+An allowlist is mandatory: a bot token is a bearer credential, so an unpaired chat is
+refused. Pairing is done from Settings, where the backend watches for **your** next
+message while you are looking at the screen. The bot never accepts an unattended
 first-message-wins pairing, because that is a race anyone can win by finding your bot
 before you do.
 
 ```bash
-cd clients/desktop && npm install && npm start    # Ctrl+Shift+Space, anywhere
+palimpsest telegram      # or just `palimpsest serve`, which starts it too
 # chrome://extensions → Load unpacked → clients/extension
 ```
 
@@ -316,19 +364,9 @@ scrape would), reads the **transcript off the page** on Udemy and Coursera where
 server cannot log in, and sends the **URL** everywhere else. See
 [clients/README.md](clients/README.md).
 
-Both post to `POST /v1/jobs` rather than `/v1/ingest`, because ingestion takes minutes
-and a popup does not live that long. The queue is durable, so a capture interrupted by a
-crash is re-queued rather than lost.
-
-## The review app
-
-```bash
-palimpsest serve      # http://127.0.0.1:8100
-```
-
-Four tabs: **Add** (paste anything, get a diff), **Review** (accept/reject per
-operation), **Sweeps**, **Mirror**. Every applied change records who approved it. The
-header always shows whether the instance is in propose-only mode.
+Every surface posts to `POST /v1/jobs` rather than `/v1/ingest`, because ingestion takes
+minutes and a popup does not live that long. The queue is durable, so a capture
+interrupted by a crash is re-queued rather than lost.
 
 ---
 

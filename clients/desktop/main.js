@@ -1,17 +1,26 @@
 /**
- * The desktop app: a keystroke, a box, and somewhere for anything to land.
+ * The desktop app: two windows over one local service.
  *
- * The whole design goal is that capturing costs nothing. Press the shortcut anywhere,
- * drop a file or paste a link, press Enter, carry on — the window is gone before the
- * ingest has started, because the server queues the work and outlives the window.
+ * The **main window** is the product — the same UI the Python service serves at
+ * `palimpsest serve`, loaded over `http://127.0.0.1`. It is not reimplemented here.
+ * Shipping the interface with the backend rather than with the shell means the browser,
+ * the app and the onboarding wizard can never disagree about what a setting is called,
+ * and it means this file stays small enough to reason about.
  *
- * The capture window is deliberately *hidden* rather than destroyed when dismissed.
- * Recreating a BrowserWindow takes a few hundred milliseconds, which is exactly long
- * enough to feel like the shortcut did not fire, and a capture tool that feels
- * unreliable is one you stop trusting with the only copy of a thought.
+ * The **capture window** is the global shortcut. Press it anywhere, drop a file or paste
+ * a link, press Enter, carry on — the window is gone before the ingest has started,
+ * because the server queues the work and outlives the window. It is deliberately *hidden*
+ * rather than destroyed when dismissed: recreating a BrowserWindow takes a few hundred
+ * milliseconds, which is exactly long enough to feel like the shortcut did not fire, and
+ * a capture tool that feels unreliable is one you stop trusting with the only copy of a
+ * thought.
+ *
+ * Configuration is not this process's business. Keys live in the Python service's own
+ * config file and are edited through its Settings screen, so there is exactly one store
+ * and no question about which copy wins.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,50 +37,52 @@ const SHORTCUT = "CommandOrControl+Shift+Space";
 
 let tray = null;
 let captureWindow = null;
-let reviewWindow = null;
+let mainWindow = null;
 let backend = null;
+let status = "starting…";
 const logLines = [];
 
 // ---------------------------------------------------------------------------
 // configuration
 // ---------------------------------------------------------------------------
 
-const envPath = () => join(app.getPath("userData"), "palimpsest.env");
-
-/** Read `KEY=value` lines. The app's keys live beside its data, not in the repo. */
-function readEnv() {
-  const path = envPath();
-  if (!existsSync(path)) {
-    // Fall back to a .env in the checkout, so someone who already configured the CLI
-    // does not have to type their keys a second time.
-    const fallback = join(REPO_ROOT, ".env");
-    if (!existsSync(fallback)) return {};
-    return parseEnv(readFileSync(fallback, "utf8"));
+/**
+ * The Python service's config file — the single store this app defers to.
+ *
+ * Mirrors `palimpsest.config.config_path()`. Duplicating the rule in two languages is
+ * not lovely, but the alternative is starting a Python process to ask a question we need
+ * answered before we have a Python process.
+ */
+function configPath() {
+  if (process.platform === "win32") {
+    return join(app.getPath("appData"), "palimpsest", "config.env");
   }
-  return parseEnv(readFileSync(path, "utf8"));
+  const xdg = process.env.XDG_CONFIG_HOME || join(app.getPath("home"), ".config");
+  return join(xdg, "palimpsest", "config.env");
 }
 
-function parseEnv(text) {
-  const out = {};
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq < 1) continue;
-    out[trimmed.slice(0, eq).trim()] = trimmed
-      .slice(eq + 1)
-      .trim()
-      .replace(/^["']|["']$/g, "");
+/**
+ * Move keys out of the app's old private store and into the shared one, once.
+ *
+ * Earlier versions kept their own `palimpsest.env` in the app data directory and passed
+ * it to the server as environment variables. Real environment variables outrank the
+ * config file, so leaving that in place would mean the Settings screen appeared to save
+ * and then changed nothing — the worst possible failure for a settings screen. Moving
+ * (not copying) the file makes the migration idempotent by construction.
+ */
+function migrateLegacyEnv() {
+  const legacy = join(app.getPath("userData"), "palimpsest.env");
+  if (!existsSync(legacy)) return;
+  const target = configPath();
+  if (existsSync(target)) {
+    renameSync(legacy, `${legacy}.superseded`);
+    log(`ignored the old ${legacy}; ${target} already exists`);
+    return;
   }
-  return out;
-}
-
-function writeEnv(values) {
-  const body = Object.entries(values)
-    .filter(([, v]) => v !== "" && v != null)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-  writeFileSync(envPath(), `${body}\n`, { mode: 0o600 });
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, readFileSync(legacy, "utf8"), { mode: 0o600 });
+  renameSync(legacy, `${legacy}.migrated`);
+  log(`moved saved keys to ${target}`);
 }
 
 function log(line, level = "info") {
@@ -128,21 +139,91 @@ function showCapture() {
   });
 }
 
-function showReview() {
-  if (!backend) return;
-  if (reviewWindow && !reviewWindow.isDestroyed()) {
-    reviewWindow.show();
-    reviewWindow.focus();
+/**
+ * The window while the service is still coming up.
+ *
+ * A first run creates a virtualenv and downloads a few hundred megabytes of wheels, which
+ * takes minutes. Loading `127.0.0.1` during that shows Chromium's connection-refused
+ * page, and an app whose first screen is a browser error is an app you close. So the
+ * window opens on a local page that says what is happening, and swaps to the real UI once
+ * the server answers.
+ */
+function splash() {
+  return (
+    "data:text/html;charset=utf-8," +
+    encodeURIComponent(`<!doctype html><meta charset="utf-8"><body style="margin:0;
+      display:flex;align-items:center;justify-content:center;height:100vh;
+      background:#f7f4ee;color:#5f574c;
+      font:14px ui-sans-serif,'Segoe UI',system-ui,sans-serif">
+      <div style="text-align:center">
+        <div style="font:600 26px Georgia,serif;color:#241f1a">palimpsest</div>
+        <div id="s" style="margin-top:14px;font-size:13px">${status}</div>
+        <div style="margin-top:22px;font-size:11.5px;color:#8d8274;max-width:30rem">
+          The first start installs the engine into its own virtualenv.
+          It only happens once.
+        </div>
+      </div></body>`)
+  );
+}
+
+function showMain(tab) {
+  const hash = tab ? `#${tab}` : "";
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    if (backend && tab) {
+      mainWindow.webContents
+        .executeJavaScript(`location.hash = ${JSON.stringify(hash)}`)
+        .catch(() => {});
+    }
     return;
   }
-  reviewWindow = new BrowserWindow({
-    width: 1100,
-    height: 800,
-    title: "palimpsest — review",
+
+  mainWindow = new BrowserWindow({
+    width: 1080,
+    height: 820,
+    minWidth: 720,
+    minHeight: 560,
+    title: "palimpsest",
     icon: icon(),
+    backgroundColor: "#f7f4ee",
+    autoHideMenuBar: true,
+    // No preload, no Node: this window renders a page whose content comes from whatever
+    // you have captured, and there is nothing here it needs from the filesystem.
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  reviewWindow.loadURL(backend.url);
-  reviewWindow.on("closed", () => (reviewWindow = null));
+
+  // Links to anywhere but the local server open in the real browser rather than turning
+  // this window into an unlabelled, un-navigable one-tab browser.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (backend && url.startsWith(backend.url)) return;
+    event.preventDefault();
+    shell.openExternal(url);
+  });
+
+  mainWindow.on("closed", () => (mainWindow = null));
+  mainWindow.loadURL(backend?.ready ? backend.url + hash : splash());
+}
+
+/** Swap the splash for the real thing, or tell the splash what is happening. */
+function refreshMain() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (backend?.ready) {
+    if (!mainWindow.webContents.getURL().startsWith("http")) {
+      mainWindow.loadURL(backend.url);
+    }
+    return;
+  }
+  mainWindow.webContents
+    .executeJavaScript(
+      `(document.getElementById("s")||{}).textContent = ${JSON.stringify(status)}`,
+    )
+    .catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -156,29 +237,19 @@ function buildTray() {
   tray.on("click", showCapture);
 }
 
-function refreshTray(status) {
+function refreshTray(next) {
+  status = next;
+  refreshMain();
   if (!tray) return;
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: `palimpsest — ${status}`, enabled: false },
       { type: "separator" },
-      { label: `Capture (${SHORTCUT.replace("CommandOrControl", "Ctrl")})`, click: showCapture },
-      { label: "Review patches", click: showReview },
-      {
-        label: "Organise the workspace",
-        click: () => {
-          showReview();
-          // The review UI has the organise view; deep-linking there saves a click on
-          // the action most likely to be why someone opened the window at all.
-          reviewWindow?.webContents.once("did-finish-load", () =>
-            reviewWindow.webContents.executeJavaScript(
-              "location.hash = '#organise'",
-            ).catch(() => {}),
-          );
-        },
-      },
+      { label: "Open palimpsest", click: () => showMain() },
+      { label: `Quick capture (${SHORTCUT.replace("CommandOrControl", "Ctrl")})`, click: showCapture },
+      { label: "Ask your notes", click: () => showMain("ask") },
       { type: "separator" },
-      { label: "Settings…", click: showSettings },
+      { label: "Settings…", click: () => showMain("settings") },
       { label: "Open the log", click: showLog },
       {
         label: "Start with Windows",
@@ -199,13 +270,6 @@ function refreshTray(status) {
   );
 }
 
-function showSettings() {
-  if (!captureWindow) captureWindow = makeCaptureWindow();
-  captureWindow.show();
-  captureWindow.focus();
-  captureWindow.webContents.send("show-settings", readEnv());
-}
-
 function showLog() {
   const win = new BrowserWindow({ width: 900, height: 600, title: "palimpsest — log" });
   const body = logLines.join("\n").replace(/[<&]/g, (c) => (c === "<" ? "&lt;" : "&amp;"));
@@ -222,16 +286,11 @@ function showLog() {
 // IPC — everything the capture window is allowed to ask for
 // ---------------------------------------------------------------------------
 
-ipcMain.handle("server-url", () => backend?.url ?? null);
+ipcMain.handle("server-url", () => (backend?.ready ? backend.url : null));
 ipcMain.handle("hide", () => captureWindow?.hide());
-ipcMain.handle("open-review", () => showReview());
-ipcMain.handle("read-env", () => readEnv());
-
-ipcMain.handle("save-env", async (_event, values) => {
-  writeEnv(values);
-  // Keys are read by the server process at startup, so they only take effect after a
-  // restart. Saying so beats silently doing nothing until the next reboot.
-  return { restartNeeded: true };
+ipcMain.handle("open-main", (_event, tab) => {
+  captureWindow?.hide();
+  showMain(typeof tab === "string" ? tab : undefined);
 });
 
 ipcMain.handle("pick-files", async () => {
@@ -280,9 +339,10 @@ ipcMain.handle("open-external", (_event, url) => shell.openExternal(url));
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", showCapture);
+  app.on("second-instance", () => showMain());
 
   app.whenReady().then(async () => {
+    migrateLegacyEnv();
     buildTray();
     captureWindow = makeCaptureWindow();
 
@@ -294,9 +354,13 @@ if (!app.requestSingleInstanceLock()) {
       venvDir: join(app.getPath("userData"), "venv"),
       repoRoot: REPO_ROOT,
       port: Number(process.env.PALIMPSEST_PORT || 8100),
-      env: readEnv(),
       log,
     });
+
+    // Open the window before starting the backend, not after: on a first run the install
+    // takes minutes, and an app that shows nothing at all for that long is one you
+    // assume failed and kill.
+    if (!process.argv.includes("--hidden")) showMain();
 
     try {
       const { adopted, url } = await backend.start((step) => {
@@ -307,6 +371,7 @@ if (!app.requestSingleInstanceLock()) {
       refreshTray(adopted ? "attached" : "running");
       log(`ready at ${url}`);
       captureWindow?.webContents.send("status", "ready");
+      refreshMain();
     } catch (error) {
       log(error.message, "error");
       refreshTray("failed");
@@ -316,11 +381,10 @@ if (!app.requestSingleInstanceLock()) {
         `${error.message}\n\n${python ? `Python ${python.version} was found.` : "No suitable Python was found."}`,
       );
     }
-
-    if (!process.argv.includes("--hidden")) showCapture();
   });
 
   app.on("window-all-closed", (event) => event.preventDefault()); // tray app
+  app.on("activate", () => showMain()); // macOS: the dock icon should bring it back
   app.on("before-quit", () => {
     app.isQuitting = true;
     globalShortcut.unregisterAll();

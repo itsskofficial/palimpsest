@@ -93,8 +93,13 @@ async function sendPaths(paths) {
 // ---------------------------------------------------------------------------
 
 $("send").addEventListener("click", send);
-$("review").addEventListener("click", () => api.openReview());
 $("browse").addEventListener("click", async () => sendPaths(await api.pickFiles()));
+
+// Both of these hand off to the main window. This window is a box and a shortcut; the
+// moment you want to *look* at something — the feed, a pending change, your keys — you
+// want the real UI, and having two half-versions of it was worse than having one.
+$("review").addEventListener("click", () => api.openMain());
+$("settings").addEventListener("click", () => api.openMain("settings"));
 
 $("input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
@@ -141,45 +146,9 @@ window.addEventListener("drop", async (event) => {
   }
 });
 
-// -- settings ---------------------------------------------------------------
-
-const FIELDS = [
-  "ANTHROPIC_API_KEY", "NOTION_TOKEN", "PALIMPSEST_NOTION_ROOTS",
-  "PALIMPSEST_APPLY", "PALIMPSEST_AUTONOMY",
-  "DEEPGRAM_API_KEY", "GROQ_API_KEY", "SARVAM_API_KEY",
-  "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHATS",
-  "FIRECRAWL_API_KEY",
-];
-
-function showView(which) {
-  $("view-capture").hidden = which !== "capture";
-  $("view-settings").hidden = which !== "settings";
-}
-
-$("settings").addEventListener("click", async () => {
-  const env = await api.readEnv();
-  for (const key of FIELDS) $(key).value = env[key] ?? "";
-  showView("settings");
-});
-
-$("settings-back").addEventListener("click", () => showView("capture"));
-
-$("settings-save").addEventListener("click", async () => {
-  const values = Object.fromEntries(FIELDS.map((key) => [key, $(key).value.trim()]));
-  const { restartNeeded } = await api.saveEnv(values);
-  say(
-    restartNeeded
-      ? "Saved. Quit palimpsest from the tray and reopen it for the keys to take effect."
-      : "Saved.",
-    "ok",
-    "settings-note",
-  );
-});
-
 // -- from the main process --------------------------------------------------
 
 api.on("focus-input", () => {
-  showView("capture");
   $("input").focus();
   $("input").select();
 });
@@ -188,11 +157,6 @@ api.on("status", (step) => {
   const el = $("status");
   el.textContent = step;
   el.className = `status${step === "ready" ? " status--ready" : ""}`;
-});
-
-api.on("show-settings", (env) => {
-  for (const key of FIELDS) $(key).value = env[key] ?? "";
-  showView("settings");
 });
 
 api.serverUrl().then((url) => (serverUrl = url));

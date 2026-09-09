@@ -1,14 +1,21 @@
-# Capture surfaces
+# Clients
 
-Three ways to get things into palimpsest without opening a terminal. All are thin: they
-decide *what* you are capturing and hand it to the queue. Everything after that —
-extraction, classification, planning, provenance, the Notion journal — is the same
-pipeline the CLI uses.
+The interface, and the ways into it that do not involve a terminal.
+
+`ui/` is the product's actual interface: a Next.js app exported as static files, shipped
+inside the Python package, and served by `palimpsest serve`. It is not a client of the
+API in the way the others are — it *is* the app, and the desktop shell and the onboarding
+wizard are both just it, wearing different frames.
+
+The rest are capture surfaces. All are thin: they decide *what* you are capturing and
+hand it to the queue. Everything after that — extraction, classification, planning,
+provenance, the Notion journal — is the same pipeline the CLI uses.
 
 ```
-telegram ──┐
-extension ─┤
-desktop ───┼──► queue ──► pipeline ──► patch ──► review ──► Notion ──► journal
+UI (drop) ─┐
+telegram ──┤
+extension ─┼──► queue ──► pipeline ──► patch ──► review ──► Notion ──► journal
+shortcut ──┤
 CLI ───────┘
 ```
 
@@ -29,20 +36,48 @@ failure a capture tool must not have.
 
 ---
 
+## The UI
+
+```bash
+cd clients/ui
+npm install
+npm run dev          # against a `palimpsest serve` on :8100
+npm run build && node scripts/ship.mjs
+```
+
+`ship.mjs` copies the export into `src/palimpsest/serve/static/`, which is **committed**.
+That is deliberate: a `pip install` must not need Node, and the alternative — building
+the UI at install time — would make a Python package depend on a JavaScript toolchain to
+show its own front page. `tests/unit/test_ui_bundle.py` guards the failure that trade
+invites, which is shipping an `index.html` whose chunks were never copied.
+
+The look is a manuscript: vellum ground, sepia ink, **rubric red for the one thing that
+needs you** and aged copper for what has safely landed. Those last two are semantic, not
+decorative — a glance at the feed tells you whether anything is waiting without reading a
+word. A proposal renders the new sentence over the struck-through line it replaces, which
+is the product's name made literal.
+
+Every colour is a token defined on bare `:root`, redefined under both
+`prefers-color-scheme: dark` and `[data-theme="dark"]`, so the app follows the system and
+still obeys an explicit choice.
+
 ## The desktop app
 
 ```bash
 cd clients/desktop
 npm install
-npm start
+npm start            # or `npm run dist` to build the installer
 ```
 
-**Press `Ctrl+Shift+Space` anywhere.** Paste a link, a transcript or a thought, drop
-files onto the window, press Enter. The window disappears immediately.
+The main window loads the UI above from `127.0.0.1`. Nothing is reimplemented here — the
+shell exists for the two things a browser tab cannot do: live in the tray, and answer
+**`Ctrl+Shift+Space` anywhere**. That shortcut opens a small box over whatever you are
+doing; paste a link or drop files, press Enter, and it is gone before the ingest starts.
 
 On first run it finds your Python, builds a virtualenv under the app's data directory,
-and installs palimpsest into it from this checkout — about a minute, once. It installs
-with `-e`, so the app runs the code you edit rather than a frozen copy.
+and installs palimpsest into it — about a minute, once. From a checkout it installs `-e`
+so the app runs the code you edit; from the installer, where there is no checkout, it
+installs `palimpsest-notion` from PyPI.
 
 Some behaviour worth knowing:
 
@@ -52,13 +87,17 @@ Some behaviour worth knowing:
 - **Files are queued by path, not uploaded.** The server is on the same machine, so
   pushing a 60 MB PDF through an HTTP request to a process that could just open it would
   be silly.
-- **Keys live in `palimpsest.env`** in the app's data directory, editable from
-  Settings. If you already have a `.env` in this checkout, it is read as a fallback so
-  you do not type them twice. Keys are read at server start, so changing them needs a
-  quit and reopen.
+- **It does not store your keys.** Configuration lives in the config file the Python
+  service owns and is edited from the app's own Settings tab. An earlier version kept a
+  private copy and passed it as environment variables, which outranked the config file
+  and made the Settings screen appear to save and then change nothing; that file is
+  migrated across on first start and then ignored.
 - **Start with Windows** is a checkbox in the tray menu.
 
-Package it with `npm run dist` (electron-builder, NSIS).
+The installer is unsigned and bundles no Python, so it is small. On Windows without
+developer mode, `npm run dist` needs `-c.win.signAndEditExecutable=false` — the signing
+toolchain unpacks macOS symlinks Windows will not create unprivileged. `.github/workflows/release.yml`
+builds all three platforms on a tag, where that privilege exists.
 
 ---
 

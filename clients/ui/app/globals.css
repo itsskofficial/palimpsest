@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * The palimpsest palette: aged vellum, sepia ink, and rubric red.
+ *
+ * `rubric` is not decoration — medieval scribes wrote in red exactly what demanded the
+ * reader's attention, and here it marks the one thing that demands yours: a change held
+ * at the gate. `verdigris` (aged copper) marks what has safely landed. Keeping those two
+ * semantic and separate from `sepia`/`gilt` (the brand accents) means a glance at the
+ * feed tells you what needs you without reading a word.
+ *
+ * Channels rather than hex, so Tailwind's `/<alpha-value>` works on every token.
+ */
+:root {
+  --vellum: 247 244 238;
+  --raised: 255 253 249;
+  --sunk: 239 233 223;
+  --ink: 36 31 26;
+  --ink-soft: 95 87 76;
+  --ink-faint: 141 130 116;
+  --rule: 223 214 201;
+  --sepia: 107 79 56;
+  --gilt: 176 137 92;
+  --rubric: 139 38 53;
+  --verdigris: 63 107 90;
+  --shadow: 60 46 32;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --vellum: 26 23 20;
+    --raised: 35 31 27;
+    --sunk: 21 18 16;
+    --ink: 236 229 218;
+    --ink-soft: 176 166 152;
+    --ink-faint: 131 122 110;
+    --rule: 58 51 44;
+    --sepia: 201 168 130;
+    --gilt: 211 181 143;
+    --rubric: 224 134 143;
+    --verdigris: 127 184 152;
+    --shadow: 0 0 0;
+  }
+}
+
+:root[data-theme="dark"] {
+  --vellum: 26 23 20;
+  --raised: 35 31 27;
+  --sunk: 21 18 16;
+  --ink: 236 229 218;
+  --ink-soft: 176 166 152;
+  --ink-faint: 131 122 110;
+  --rule: 58 51 44;
+  --sepia: 201 168 130;
+  --gilt: 211 181 143;
+  --rubric: 224 134 143;
+  --verdigris: 127 184 152;
+  --shadow: 0 0 0;
+}
+
+html, body { height: 100%; }
+
+body {
+  background: rgb(var(--vellum));
+  color: rgb(var(--ink));
+  font-feature-settings: "kern", "liga";
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * The vellum grain. A faint two-layer gradient wash rather than an image: it survives
+ * both themes, costs nothing to load, and gives the ground the slight unevenness that
+ * makes it read as a surface rather than a flat fill.
+ */
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 0%, rgb(var(--gilt) / 0.07), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 90% 10%, rgb(var(--sepia) / 0.06), transparent 55%);
+}
+
+/* The struck-through ghost of superseded text — the palimpsest itself. */
+.ghost {
+  text-decoration: line-through;
+  text-decoration-color: rgb(var(--rubric) / 0.5);
+  color: rgb(var(--ink-faint));
+}
+
+::selection { background: rgb(var(--gilt) / 0.3); }
+
+*:focus-visible {
+  outline: 2px solid rgb(var(--sepia));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Scrollbars that belong to the page rather than the OS. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--rule));
+  border-radius: 99px;
+  border: 3px solid rgb(var(--vellum));
+}
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink-faint)); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

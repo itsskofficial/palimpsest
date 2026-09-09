@@ -1,0 +1,53 @@
+# How the installer is built.
+#
+# In YAML rather than in package.json so the choices below can carry their reasons.
+
+appId: dev.palimpsest.desktop
+productName: palimpsest
+copyright: MIT
+directories:
+  output: dist
+
+# Listed explicitly rather than globbed. electron-builder's default sweeps in everything
+# beside main.js, and a development run leaves a SQLite database there — somebody's
+# actual notes, shipped inside an installer. An allowlist cannot make that mistake.
+files:
+  - main.js
+  - backend.js
+  - preload.cjs
+  - capture.html
+  - capture.css
+  - capture.js
+  - icon.png
+
+# No Python and no wheels are bundled: the app installs `palimpsest-notion` into its own
+# virtualenv on first run, so the installer stays small and the engine can be upgraded
+# without reinstalling the shell.
+win:
+  icon: icon.png
+  artifactName: palimpsest-${version}-setup.${ext}
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  # Not a one-click installer: the first run downloads a few hundred megabytes into a
+  # virtualenv, and someone who was not given the choice of install location is entitled
+  # to be annoyed about where that landed.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: palimpsest
+
+mac:
+  icon: icon.png
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+
+linux:
+  icon: icon.png
+  category: Utility
+  target: [AppImage, deb]

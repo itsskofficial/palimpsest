@@ -100,3 +100,27 @@ jobs:
       - name: Only notion.apply writes to Notion
         run: lint-imports
       - run: pytest tests/unit/test_apply.py tests/unit/test_serve.py -v
+
+  ui:
+    # The interface is TypeScript and it ships inside the Python package, so a type error
+    # in it is a broken release even though no Python changed. `next build` type-checks
+    # and lints as part of the build, which is why there is no separate step for either.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: clients/ui/package-lock.json
+      - run: npm ci
+        working-directory: clients/ui
+      - run: npm run build
+        working-directory: clients/ui
+      - name: The committed export matches a fresh build
+        # Not a byte-for-byte diff — hashed filenames make that brittle across Node
+        # patch versions. This asserts the weaker, useful thing: the copy in the package
+        # is complete, so `pip install` serves a UI that actually loads.
+        run: |
+          node clients/ui/scripts/ship.mjs
+          pip install pytest && python -m pytest tests/unit/test_ui_bundle.py -q
