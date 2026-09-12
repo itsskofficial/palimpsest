@@ -58,6 +58,29 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
 
+  # The extension, zipped so that installing it is a file you drag rather than a
+  # repository you clone. Not the Chrome Web Store -- that needs a developer account
+  # and a review -- but it is the difference between `chrome://extensions -> Load
+  # unpacked -> point at this folder` and something you can hand to somebody.
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+        working-directory: clients
+      - name: The tests that guard what gets packed
+        run: npm test
+        working-directory: clients
+      - run: node clients/extension/pack.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: clients/extension/dist/*.zip
+          if-no-files-found: error
+
   # The Python package, published by PyPI's trusted publishing rather than a token.
   #
   # This matters more here than it usually would. The installers do not contain the
@@ -98,13 +121,14 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   publish:
-    needs: installers
+    needs: [installers, extension]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      # Everything the matrix and the extension job uploaded, not just `installer-*` --
+      # the narrower pattern silently published a release with no extension in it.
       - uses: actions/download-artifact@v4
         with:
-          pattern: installer-*
           merge-multiple: true
           path: installers
       # The changelog, not a list of commit subjects. `generate_release_notes` produces

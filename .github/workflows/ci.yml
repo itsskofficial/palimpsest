@@ -136,6 +136,36 @@ jobs:
         run: lint-imports
       - run: pytest tests/unit/test_apply.py tests/unit/test_serve.py -v
 
+  clients:
+    # The extension and the desktop shell, neither of which was tested by anything
+    # that ran automatically. Both are how most people will actually meet this
+    # project, and both fail in the same shape: a file present on the developer's
+    # disk and absent from the list that gets packaged, which passes every check
+    # here and breaks totally on somebody else's machine.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm install
+        working-directory: clients
+      - name: Extension and desktop shell
+        run: npm test
+        working-directory: clients
+      - name: Every shell file parses
+        # `node --check` on the Electron entry points. They import `electron`, which
+        # is not importable outside Electron, so a syntax error in them is otherwise
+        # found by launching the app -- which nothing in CI does.
+        run: node --check clients/desktop/main.js && node --check clients/desktop/backend.js
+      - name: The extension packs into something installable
+        run: |
+          node clients/extension/pack.mjs
+          python -c "import zipfile,glob,sys; z=glob.glob('clients/extension/dist/*.zip')[0]; sys.exit(zipfile.ZipFile(z).testzip() or 0)"
+
   ui:
     # The interface is TypeScript and it ships inside the Python package, so a type error
     # in it is a broken release even though no Python changed. `next build` type-checks

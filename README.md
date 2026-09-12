@@ -550,9 +550,14 @@ message while you are looking at the screen. The bot never accepts an unattended
 first-message-wins pairing, because that is a race anyone can win by finding your bot
 before you do.
 
+**The extension** is attached to every [release](https://github.com/itsskofficial/palimpsest/releases/latest)
+as `palimpsest-extension-<version>.zip`. Unzip it, open `chrome://extensions`, turn on
+developer mode and drag the folder in. It is not on the Chrome Web Store, so this is the
+install — which is honest about what it is rather than asking you to clone a repository.
+
 ```bash
-palimpsest telegram      # or just `palimpsest serve`, which starts it too
-# chrome://extensions → Load unpacked → clients/extension
+palimpsest telegram                  # or just `palimpsest serve`, which starts it too
+npm --prefix clients run pack:extension   # build the zip yourself
 ```
 
 The extension sends a YouTube **link** (the server fetches better captions than a page

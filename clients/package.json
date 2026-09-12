@@ -2,9 +2,10 @@
   "name": "palimpsest-clients",
   "private": true,
   "type": "module",
-  "description": "Test harness for the palimpsest browser extension and desktop app.",
+  "description": "Tests for the palimpsest browser extension and desktop shell.",
   "scripts": {
-    "test": "node --test extension/test/*.test.mjs"
+    "test": "node --test extension/test/*.test.mjs desktop/test/*.test.mjs",
+    "pack:extension": "node extension/pack.mjs"
   },
   "devDependencies": {
     "linkedom": "^0.18.11"
