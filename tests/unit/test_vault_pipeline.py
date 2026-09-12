@@ -215,3 +215,37 @@ def test_a_page_edited_outside_the_tool_between_sync_and_apply_still_works(
 
     assert gated["applied"] >= 1, gated
     assert "usual remedy" in path.read_text(encoding="utf-8"), "their edit survived"
+
+
+def test_a_patch_carries_what_it_could_not_decide(vault, settings, store):
+    """A contradiction produces no operation by construction, which is what makes it a
+    review item. Without the patch carrying its own review, such a patch reached the
+    activity feed as "0 changes, waiting" — accurate, and with no way to find out what
+    was waiting or what it disagreed with.
+    """
+    sync(vault, store, incremental=False)
+    result = ingest("Per-parameter clipping conventionally uses a threshold of 1.0.",
+                    store, ScriptedModel("contradicts"), settings=settings)
+
+    assert result.patch.operations == []
+    assert result.patch.review, "the patch must carry its own unfinished business"
+
+    item = result.patch.review[0]
+    assert item["reason"] == "contradiction"
+    assert item["judgement"]["relation"] == "contradicts"
+    assert item["page"] == "Gradient clipping"
+    assert item["judgement"]["rationale"]
+
+
+def test_the_review_survives_a_round_trip_through_the_store(vault, settings, store):
+    """It persists inside the patch payload, so it is there when the feed asks — no
+    migration, and it travels with the thing it explains."""
+    sync(vault, store, incremental=False)
+    result = ingest("Per-parameter clipping conventionally uses a threshold of 1.0.",
+                    store, ScriptedModel("contradicts"), settings=settings)
+    store.put_patch(result.patch)
+
+    reloaded = store.get_patch(result.patch.patch_id)
+    assert reloaded is not None
+    assert len(reloaded.review) == len(result.patch.review)
+    assert reloaded.review[0]["judgement"]["relation"] == "contradicts"

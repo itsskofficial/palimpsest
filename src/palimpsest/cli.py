@@ -477,7 +477,10 @@ def cmd_demo(args) -> int:
     # ship somebody's trial run to their own Langfuse project.
     os.environ["PALIMPSEST_TRACE"] = "0"
 
-    vault = demo.install(args.dir or demo.default_home(), force=args.reset)
+    try:
+        vault = demo.install(args.dir or demo.default_home(), force=args.reset)
+    except RuntimeError as e:
+        raise SystemExit(str(e)) from e
     settings = demo.settings_for(vault)
     settings, model = demo.ensure_model(settings)
 

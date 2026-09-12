@@ -116,7 +116,18 @@ def install(target: str | Path, *, force: bool = False) -> Path:
         if not force:
             log.info("reusing the existing demo vault at %s", destination)
             return destination
-        shutil.rmtree(destination)
+        try:
+            shutil.rmtree(destination)
+        except OSError as e:
+            # Windows will not unlink a file another process has open, and the other
+            # process is usually a demo the user forgot they left running. A traceback
+            # thirty seconds into somebody's first look at the project is a bad trade
+            # for a case with an obvious instruction.
+            raise RuntimeError(
+                f"could not reset {destination}: {e}\n"
+                "Something still has the demo open — close the other `palimpsest demo`, "
+                "or pass --dir to use a different folder."
+            ) from e
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(vault_source(), destination, dirs_exist_ok=True)

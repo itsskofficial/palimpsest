@@ -234,3 +234,19 @@ def test_an_actually_unconfigured_machine_still_gets_the_wizard():
 
     assert not is_configured(Settings())
     assert not is_configured(Settings(notion_token="ntn_x", anthropic_api_key="sk-x"))
+
+
+def test_a_reset_that_cannot_delete_says_what_to_do(tmp_path, monkeypatch):
+    """Windows will not unlink a file another process has open, and that process is
+    usually a demo the user forgot they left running. A traceback thirty seconds into
+    somebody's first look at the project is a bad trade for a case with an obvious
+    instruction."""
+    vault = demo.install(tmp_path / "v")
+
+    def locked(*_a, **_k):
+        raise PermissionError(32, "The process cannot access the file")
+
+    monkeypatch.setattr("shutil.rmtree", locked)
+
+    with pytest.raises(RuntimeError, match="--dir"):
+        demo.install(vault, force=True)
