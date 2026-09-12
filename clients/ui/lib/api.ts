@@ -134,6 +134,16 @@ export type ActivityEntry = {
   reverted: boolean;
   relations: string[];
   pages: string[];
+  /** What it could not decide on its own, and why. Usually a contradiction. */
+  review?: {
+    reason: string | null;
+    relation: string | null;
+    confidence: number | null;
+    rationale: string | null;
+    claim: string | null;
+    existing_text: string | null;
+    page: string | null;
+  }[];
 };
 
 /** What `palimpsest demo` is offering, if this is a demo vault at all. */

@@ -32,6 +32,17 @@ temporary folder instead of in your workspace. It uses whatever model you have c
 falls back to a local [Ollama](https://ollama.com) if you have one, and if it finds
 neither it still opens and says so.
 
+![The capture surface, with the four suggested facts](docs/images/capture.png)
+
+Here is what the first of those four produces. The source says per-parameter clipping is
+better; the page says the opposite. **It does not pick a winner.** It shows you both,
+says why they cannot both be true, and waits — which is the one thing it will not do
+without you, at any autonomy setting:
+
+![Two contradictions, each quoting the line it disagrees with](docs/images/activity.png)
+
+Everything else *is* applied, and every applied change has an Undo next to it.
+
 ## Then point it at your own notes
 
 ```bash

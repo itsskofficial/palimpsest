@@ -70,7 +70,10 @@ export function DemoPrompts({ onPick }: { onPick: (text: string) => void }) {
                 onPick(state.prompts[open!].text);
                 setOpen(null);
               }}
-              className="mt-3 rounded-lg bg-ink px-3 py-1.5 text-sm text-paper transition hover:opacity-90"
+              // The house primary button. `bg-ink` was invisible: `--ink` is the *text*
+              // colour, which inverts with the theme, so in dark mode this was cream on
+              // cream. Semantic tokens are only a help if you use the semantic one.
+              className="mt-3 rounded-lg bg-sepia px-4 py-1.5 text-sm font-medium text-vellum transition hover:opacity-90"
             >
               Put it in the box
             </button>

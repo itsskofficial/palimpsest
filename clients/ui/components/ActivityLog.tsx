@@ -108,6 +108,7 @@ function Row({
   const state = entry.reverted
     ? STATUS.reverted
     : (STATUS[entry.status] ?? { label: entry.status, tone: "text-faint border-rule" });
+  const review = entry.review ?? [];
 
   return (
     <motion.li
@@ -125,6 +126,8 @@ function Row({
           <p className="mt-0.5 text-[12.5px] text-soft">
             {entry.applied || entry.operations} change
             {(entry.applied || entry.operations) === 1 ? "" : "s"}
+            {review.length > 0 &&
+              ` · ${review.length} for you to decide`}
             {entry.relations.length > 0 && ` · ${entry.relations.join(", ")}`}
             {entry.pages.length > 0 && ` · ${entry.pages.slice(0, 3).join(", ")}`}
             {entry.reviewer && ` · by ${entry.reviewer}`}
@@ -148,6 +151,33 @@ function Row({
           )}
         </div>
       </div>
+
+      {/*
+        A patch that is entirely review has no operations, so without this it rendered as
+        "0 changes · waiting" — accurate, and useless. What is waiting is the interesting
+        part: two sourced claims that disagree, and the system declining to pick a winner.
+      */}
+      {review.length > 0 && (
+        <ul className="mt-3 space-y-2 border-t border-rule pt-3">
+          {review.map((item, i) => (
+            <li key={i} className="text-[13px] leading-relaxed">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-rubric">
+                {item.relation ?? item.reason}
+              </span>
+              {item.page && <span className="text-faint"> · {item.page}</span>}
+              {item.claim && <p className="mt-1 text-ink">{item.claim}</p>}
+              {item.existing_text && (
+                <p className="mt-1 border-l-2 border-rule pl-3 text-soft">
+                  your note says: {item.existing_text}
+                </p>
+              )}
+              {item.rationale && (
+                <p className="mt-1 text-[12.5px] text-faint">{item.rationale}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
 
       <p className="mt-2 font-mono text-[10px] text-faint">
         {entry.patch_id}

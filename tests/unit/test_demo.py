@@ -213,3 +213,24 @@ def test_ordinary_paragraphs_still_get_their_blank_line():
         for text in ("First thought.", "Second thought.")]
 
     assert to_markdown(blocks) == "First thought.\n\nSecond thought."
+
+
+def test_a_demo_never_shows_the_setup_wizard(configured):
+    """The first screen of the zero-setup path was a setup form.
+
+    `is_configured` requires a Notion token and a paired Telegram chat, and a demo
+    deliberately has neither — so the UI decided it was a fresh install and opened on
+    onboarding. Somebody who ran one command to avoid configuring anything was shown a
+    form asking them to configure things.
+    """
+    from palimpsest.onboard import is_configured
+
+    assert is_configured(demo.settings_for(configured))
+
+
+def test_an_actually_unconfigured_machine_still_gets_the_wizard():
+    """The other direction, so the fix above is not "never show the wizard"."""
+    from palimpsest.onboard import is_configured
+
+    assert not is_configured(Settings())
+    assert not is_configured(Settings(notion_token="ntn_x", anthropic_api_key="sk-x"))

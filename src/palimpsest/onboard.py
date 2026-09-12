@@ -73,7 +73,15 @@ def _ask(prompt: str, *, secret: bool = False, default: str | None = None,
 
 
 def is_configured(settings) -> bool:
-    """Whether the essentials for the bot to actually do something are present."""
+    """Whether the essentials for the bot to actually do something are present.
+
+    A demo is configured by construction. It has a workspace (the sample vault) and it
+    deliberately has no Notion token and no bot, so the old check called it unconfigured
+    and the app opened on a setup wizard -- which is precisely the thing `palimpsest demo`
+    exists to let somebody skip. The first screen of the zero-setup path was a form.
+    """
+    if getattr(settings, "environment", "") == "demo":
+        return True
     return bool(settings.has_notion and settings.has_model and settings.telegram_token
                 and settings.telegram_allowed_chats)
 

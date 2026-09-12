@@ -447,6 +447,16 @@ class Patch:
     reviewer: str | None = None
     reviewed_at: float | None = None
     notes: str = ""
+    #: What the planner could not decide on its own: contradictions, and anything
+    #: under the confidence bar. These carry no operation by construction -- that
+    #: is what makes them review items -- so a patch that is *entirely* review
+    #: used to reach the UI as "0 changes, waiting", which is accurate and tells
+    #: the reader nothing about the two contradictions sitting inside it.
+    #:
+    #: Kept on the patch rather than in a table of its own because `put_patch`
+    #: stores `as_dict()` whole, so this persists with no migration and travels
+    #: with the thing it explains.
+    review: list[dict] = field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.operations)
@@ -503,6 +513,7 @@ class Patch:
             "created_at": self.created_at, "status": self.status,
             "reviewer": self.reviewer, "reviewed_at": self.reviewed_at,
             "notes": self.notes, "by_relation": self.by_relation(),
+            "review": self.review,
         }
 
     @classmethod
@@ -512,7 +523,7 @@ class Patch:
             operations=[Operation.from_dict(o) for o in d.get("operations", [])],
             created_at=d.get("created_at", 0.0), status=d.get("status", "proposed"),
             reviewer=d.get("reviewer"), reviewed_at=d.get("reviewed_at"),
-            notes=d.get("notes", ""),
+            notes=d.get("notes", ""), review=list(d.get("review") or []),
         )
 
     def to_json(self, indent: int = 2) -> str:

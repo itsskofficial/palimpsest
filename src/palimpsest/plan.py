@@ -185,6 +185,10 @@ def plan(judgements: list[Judgement], claims: dict[str, Claim], source: Source,
 
         patch.operations.extend(_merged(ops, new_pages))
 
+    # The patch carries its own unfinished business, so anything that reads a patch
+    # later -- the activity feed above all -- can say what it is waiting for.
+    patch.review = list(result.review)
+
     return result
 
 

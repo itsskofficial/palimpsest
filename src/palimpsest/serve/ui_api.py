@@ -400,6 +400,19 @@ def register(app, st) -> None:
                                      if op.relation}),
                 "pages": sorted({p for p in (_page_name(st.store, op) for op in
                                              patch.operations) if p}),
+                # What it could not decide, and why. A patch that is entirely review --
+                # the usual shape when a source contradicts a page -- has no operations
+                # at all, so without this the feed showed "0 changes, waiting" and left
+                # the reader with no way to find out what was waiting or what to do.
+                "review": [{
+                    "reason": item.get("reason"),
+                    "relation": (item.get("judgement") or {}).get("relation"),
+                    "confidence": (item.get("judgement") or {}).get("confidence"),
+                    "rationale": (item.get("judgement") or {}).get("rationale"),
+                    "claim": (item.get("claim") or {}).get("text"),
+                    "existing_text": item.get("existing_text"),
+                    "page": item.get("page"),
+                } for item in (patch.review or [])],
             })
         return {"activity": rows}
 
