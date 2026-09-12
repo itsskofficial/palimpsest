@@ -107,7 +107,25 @@ jobs:
           pattern: installer-*
           merge-multiple: true
           path: installers
+      # The changelog, not a list of commit subjects. `generate_release_notes` produces
+      # the latter, which reads as an internal log rather than as an answer to "should I
+      # upgrade" -- and the answer to that is already written, once, in CHANGELOG.md.
+      - uses: actions/checkout@v4
+      - name: The notes for this version
+        shell: bash
+        run: |
+          python - <<'PY' > notes.md
+          import pathlib, re
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          import os
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          blocks = re.split(r"^## ", text, flags=re.M)
+          section = next((b for b in blocks if b.startswith(version)), "")
+          print(("## " + section).strip() if section else
+                f"See CHANGELOG.md for {version}.")
+          PY
+          head -5 notes.md
       - uses: softprops/action-gh-release@v2
         with:
           files: installers/*
-          generate_release_notes: true
+          body_path: notes.md

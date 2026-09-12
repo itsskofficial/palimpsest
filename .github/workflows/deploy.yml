@@ -7,8 +7,16 @@ name: Deploy
 # rotate. Set `AWS_DEPLOY_ROLE_ARN` to a role trusting your repo — the exact trust
 # policy is in DEPLOYMENT.md.
 #
-# Manual by default. A deployment that happens because someone merged a README change
-# is a deployment nobody is watching.
+# Manual, and only manual.
+#
+# It used to say that in this comment and then also trigger on every `v*` tag, which is
+# not the same thing. The product is a desktop app, a phone bot and an extension, all
+# talking to a service on your own machine; the hosted deployment is for the few people
+# running one, and it is not part of cutting a release. Left on the tag it turned every
+# release red for everyone without an AWS role configured, which trains you to ignore a
+# failing release workflow -- and the next thing it fails on will be the installers.
+#
+# `gh workflow run deploy.yml` when you actually mean it.
 
 on:
   workflow_dispatch:
@@ -21,9 +29,6 @@ on:
         description: Run the migration task before rolling the service
         default: true
         type: boolean
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read
