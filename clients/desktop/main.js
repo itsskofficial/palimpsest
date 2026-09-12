@@ -255,6 +255,54 @@ function refreshMain() {
 // tray
 // ---------------------------------------------------------------------------
 
+/**
+ * The engine version, when it is older than this shell. `null` when they agree.
+ *
+ * This is not a nicety. The venv is built once, on first run, and was then never
+ * touched again -- so somebody who installed in September was still running
+ * September's engine months later, with none of the fixes, and nothing anywhere said
+ * so. It surfaced in the worst possible way: an installer built from the current
+ * source installed an engine nine months older, and since the *interface* ships
+ * inside the Python package, the window rendered a UI that predated the design. It
+ * looked exactly like a botched redesign and was in fact a stale dependency.
+ */
+let engineStale = null;
+
+function checkEngine() {
+  const engine = backend?.engineVersion?.();
+  const shell = app.getVersion();
+  if (!engine || engine === shell) {
+    engineStale = null;
+    return;
+  }
+  engineStale = engine;
+  log(
+    `the engine is ${engine} but this app is ${shell}. The interface ships inside ` +
+      "the engine, so the window is showing that version. Tray \u2192 Update the engine.",
+    "warn",
+  );
+  refreshTray(`engine ${engine} \u2014 update available`);
+}
+
+async function updateEngine() {
+  if (!backend) return;
+  try {
+    refreshTray("updating the engine\u2026");
+    await backend.upgrade((message) => refreshTray(message));
+    // The server is running the old code until it is restarted, and restarting it
+    // is the whole point of having updated.
+    backend.stop();
+    backend.stopping = false;
+    await backend.start((message) => refreshTray(message));
+    checkEngine();
+    refreshTray("ready");
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+  } catch (error) {
+    log(`could not update the engine: ${error.message}`, "error");
+    refreshTray("engine update failed");
+  }
+}
+
 function buildTray() {
   tray = new Tray(icon());
   tray.setToolTip("palimpsest");
@@ -281,6 +329,12 @@ function refreshTray(next) {
       { type: "separator" },
       { label: "Settings…", click: () => showMain("settings") },
       { label: "Open the log", click: showLog },
+      {
+        label: engineStale
+          ? `Update the engine (${engineStale} \u2192 ${app.getVersion()})\u2026`
+          : "Check for engine updates\u2026",
+        click: updateEngine,
+      },
       {
         label: "Start with Windows",
         type: "checkbox",
@@ -412,6 +466,10 @@ if (!app.requestSingleInstanceLock()) {
       log(`ready at ${url}`);
       captureWindow?.webContents.send("status", "ready");
       refreshMain();
+      // Only once the server is up, so the version read is of the thing now running.
+      // Skipped for an adopted server: that one belongs to somebody's terminal and its
+      // version is their business, not this app's.
+      if (!adopted) checkEngine();
     } catch (error) {
       log(error.message, "error");
       refreshTray("failed");

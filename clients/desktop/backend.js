@@ -22,6 +22,11 @@
  *    is a perfectly good server, so adopt it instead of fighting it.
  * 3. **The server dies.** Restart it, with a backoff, and give up loudly after a few
  *    tries instead of hammering a broken install forever.
+ * 4. **The engine is older than the shell.** The install ran once, when the venv was
+ *    created, and then never again -- so a user who installed in September was
+ *    still running September's engine in March, with none of the fixes, and no
+ *    indication anything was wrong. `engineVersion` and `upgrade` are how that
+ *    state becomes visible and fixable without deleting a directory by hand.
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -108,6 +113,36 @@ export class Backend {
     return checkout
       ? { args: ["-e", `${this.repoRoot}${EXTRAS}`], what: "this checkout" }
       : { args: [`${PACKAGE}${EXTRAS}`], what: `${PACKAGE} from PyPI` };
+  }
+
+  /**
+   * The version of palimpsest inside the venv, or null if it cannot be asked.
+   *
+   * Read from the engine rather than from pip's metadata, because what matters is
+   * what will actually run.
+   */
+  engineVersion() {
+    if (!this.installed) return null;
+    const probe = spawnSync(this.python, ["-m", "palimpsest.cli", "--version"], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    if (probe.status !== 0) return null;
+    const match = (probe.stdout || "").match(/(\d+\.\d+\.\d+)/);
+    return match ? match[1] : null;
+  }
+
+  /** Upgrade the engine in place. Returns the version afterwards. */
+  async upgrade(onProgress = () => {}) {
+    const { args, what } = this.target;
+    onProgress(`Updating ${what}…`);
+    await this.#run(this.python, [
+      "-m", "pip", "install", "--disable-pip-version-check", "-q", "--upgrade",
+      ...args,
+    ]);
+    const version = this.engineVersion();
+    this.log(`engine is now ${version ?? "an unknown version"}`);
+    return version;
   }
 
   async alive() {
