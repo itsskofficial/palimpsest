@@ -265,6 +265,16 @@ def describe_embedding(settings=None):
     model = value("PALIMPSEST_EMBED_MODEL")
     base = value("PALIMPSEST_EMBED_BASE_URL")
 
+    def chosen(named_model: str, default: str) -> str:
+        """The model to ask for, treating the OpenAI default as "not actually chosen".
+
+        `embed_model` has a default rather than being empty, which reads as a deliberate
+        choice everywhere downstream. Taken literally it sends `text-embedding-3-small`
+        to Together and to Mistral, neither of which serves it: picking a provider in the
+        settings screen and nothing else fails on every block of the first sync.
+        """
+        return named_model if named_model != "text-embedding-3-small" else default
+
     named = (value("PALIMPSEST_EMBED_PROVIDER")
              or value("PALIMPSEST_MODEL_PROVIDER")).strip().lower()
     if not base and named in LOCAL_RUNTIMES:
@@ -273,17 +283,32 @@ def describe_embedding(settings=None):
         # configuration where embeddings cost nothing, which is the whole reason to make
         # it easy to fall into.
         url, _, default_embed = LOCAL_RUNTIMES[named]
-        chosen = model if model != "text-embedding-3-small" else default_embed
-        return ModelSetup(named, chosen, url, f"local runtime {named}") if chosen else None
+        picked = chosen(model, default_embed)
+        return ModelSetup(named, picked, url, f"local runtime {named}") if picked else None
 
     if base:
         if not model:
             return None
         return ModelSetup("openai-compatible", model, base,
                           "PALIMPSEST_EMBED_BASE_URL is set")
+
+    # A hosted provider named outright, with its key given either as the embed-specific
+    # variable or as that vendor's own. Without this, the pair the settings screen offers
+    # -- a provider and a key -- resolved to nothing at all: `status` reported "lexical
+    # only" for a configuration that plainly named both, `resolve` never ran, and the
+    # only symptom was retrieval quietly staying on BM25. A key with no provider named
+    # means OpenAI, which is already what the default model and base URL assume.
+    if not named and value("PALIMPSEST_EMBED_API_KEY"):
+        named = "openai"
+    if named in EMBED_PROVIDERS:
+        env, url, default = EMBED_PROVIDERS[named]
+        if value("PALIMPSEST_EMBED_API_KEY") or value(env):
+            return ModelSetup(named, chosen(model, default), url,
+                              f"PALIMPSEST_EMBED_PROVIDER={named}")
+
     for name, (env, url, default) in EMBED_PROVIDERS.items():
         if value(env):
-            return ModelSetup(name, model or default, url, f"{env} is set")
+            return ModelSetup(name, chosen(model, default), url, f"{env} is set")
     return None
 
 
