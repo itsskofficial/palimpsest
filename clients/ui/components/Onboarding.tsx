@@ -130,12 +130,26 @@ function Field({
   );
 }
 
-function Note({ kind, children }: { kind: "ok" | "err"; children: React.ReactNode }) {
+/**
+ * `warn` is a third thing on purpose. "Your token is fine but Notion has not been told
+ * to let it see anything" is not an error — nothing is broken and nothing needs undoing
+ * — and colouring it like one sends people back to re-copy a token that was always
+ * correct. It is a step they have not done yet, so it reads as one.
+ */
+function Note({
+  kind,
+  children,
+}: {
+  kind: "ok" | "err" | "warn";
+  children: React.ReactNode;
+}) {
+  const tone =
+    kind === "ok" ? "text-verdigris" : kind === "warn" ? "text-gilt" : "text-rubric";
   return (
     <motion.p
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`text-[13px] ${kind === "ok" ? "text-verdigris" : "text-rubric"}`}
+      className={`text-[13px] ${tone}`}
     >
       {children}
     </motion.p>
@@ -387,9 +401,18 @@ function ClaudeStep({ onNext }: { onNext: () => void }) {
 
 function NotionStep({ onNext }: { onNext: (token: string) => void }) {
   const [token, setToken] = useState("");
-  const [state, setState] = useState<"idle" | "busy" | "err">("idle");
+  const [state, setState] = useState<"idle" | "busy" | "err" | "unshared">("idle");
   const [msg, setMsg] = useState("");
 
+  /**
+   * Authenticating and being granted access are two different things in Notion, and the
+   * failure of the second looks exactly like success: the token validates, and the
+   * integration can see nothing. That used to walk straight on to "pick a page" and show
+   * an empty list — at the step the instructions above call the one everyone misses.
+   *
+   * So a token that works but sees nothing is its own state, with the fix spelled out
+   * and a button to check again, rather than an error or a silent pass.
+   */
   const submit = async () => {
     if (!token.trim()) return;
     setState("busy");
@@ -398,6 +421,11 @@ function NotionStep({ onNext }: { onNext: (token: string) => void }) {
       if (!r.ok) {
         setState("err");
         setMsg(r.error ?? "Notion rejected that token");
+        return;
+      }
+      if (r.warning) {
+        setState("unshared");
+        setMsg(r.warning);
         return;
       }
       await api.saveSettings({ NOTION_TOKEN: token.trim() });
@@ -414,7 +442,23 @@ function NotionStep({ onNext }: { onNext: (token: string) => void }) {
         Notion
       </Title>
       <ol className="mt-4 space-y-1.5 text-[13px] text-soft">
-        <li>1. Go to notion.so/my-integrations → New integration</li>
+        <li>
+          1. Go to{" "}
+          {/*
+            A real link, not prose. The desktop shell routes external navigation to the
+            system browser, so this is one click rather than "select the text, copy it,
+            find a browser, hope you typed the hyphen".
+          */}
+          <a
+            href="https://www.notion.so/my-integrations"
+            target="_blank"
+            rel="noreferrer"
+            className="text-ink underline decoration-rule underline-offset-2 transition hover:decoration-sepia"
+          >
+            notion.so/my-integrations
+          </a>{" "}
+          → New integration
+        </li>
         <li>2. Give it Read, Update and Insert content</li>
         <li>3. Copy the token (it starts with ntn_)</li>
         <li className="text-ink">
@@ -428,8 +472,13 @@ function NotionStep({ onNext }: { onNext: (token: string) => void }) {
       <div className="mt-4 space-y-3">
         <Field value={token} onChange={setToken} placeholder="ntn_…" onEnter={submit} />
         {state === "err" && <Note kind="err">{msg}</Note>}
+        {state === "unshared" && <Note kind="warn">{msg}</Note>}
         <Primary onClick={submit} disabled={state === "busy" || !token.trim()}>
-          {state === "busy" ? "Connecting…" : "Continue"}
+          {state === "busy"
+            ? "Connecting…"
+            : state === "unshared"
+              ? "I've shared a page — check again"
+              : "Continue"}
         </Primary>
       </div>
     </div>

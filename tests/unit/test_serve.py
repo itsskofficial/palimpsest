@@ -136,3 +136,59 @@ def test_pages_and_provenance_endpoints(client):
     assert client.get("/v1/pages/pg_1").json()["page"]["title"] == "Page"
     assert client.get("/v1/pages/missing").status_code == 404
     assert client.get("/v1/blocks/bk_1/provenance").json()["provenance"] == []
+
+
+# ---------------------------------------------------------------------------
+# the onboarding step everyone gets stuck on
+# ---------------------------------------------------------------------------
+
+
+def test_a_notion_token_that_can_see_nothing_is_reported_as_such(client, monkeypatch):
+    """Authenticating and being granted access are two different things in Notion, and
+    the failure of the second looks exactly like success.
+
+    `whoami` succeeds for a brand-new integration that has not been added to any page, so
+    validating on that alone accepted the token, walked on to "pick a page", and showed
+    an empty list with no explanation — at exactly the step the wizard's own instructions
+    call the one everyone misses.
+    """
+    class Blind:
+        def __init__(self, token, **kw):
+            pass
+
+        def whoami(self):
+            return {"name": "my integration"}
+
+        def search_pages(self, query=""):
+            return iter(())
+
+    monkeypatch.setattr("palimpsest.notion.client.NotionClient", Blind)
+
+    body = client.post("/v1/setup/validate",
+                       json={"provider": "notion", "token": "ntn_x"}).json()
+
+    assert body["ok"] is True, "the token itself is fine, and saying otherwise misleads"
+    assert body["shared_pages"] == 0
+    assert "Connections" in body["warning"]
+
+
+def test_a_notion_token_that_can_see_a_page_carries_no_warning(client, monkeypatch):
+    class Sighted:
+        def __init__(self, token, **kw):
+            pass
+
+        def whoami(self):
+            return {"name": "my integration"}
+
+        def search_pages(self, query=""):
+            return iter([{"id": "pg_1", "properties": {
+                "title": {"type": "title", "title": [{"plain_text": "Notes"}]}}}])
+
+    monkeypatch.setattr("palimpsest.notion.client.NotionClient", Sighted)
+
+    body = client.post("/v1/setup/validate",
+                       json={"provider": "notion", "token": "ntn_x"}).json()
+
+    assert body["ok"] is True
+    assert body["shared_pages"] == 1
+    assert body["warning"] is None

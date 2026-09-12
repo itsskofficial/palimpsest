@@ -159,10 +159,15 @@ export const api = {
   demo: () => request<DemoState>("/v1/demo"),
 
   validate: (provider: string, token: string) =>
-    post<{ ok: boolean; detail?: string; error?: string; username?: string }>(
-      "/v1/setup/validate",
-      { provider, token },
-    ),
+    post<{
+      ok: boolean;
+      detail?: string;
+      error?: string;
+      username?: string;
+      /** Notion only: whether the integration can actually see anything yet. */
+      shared_pages?: number;
+      warning?: string | null;
+    }>("/v1/setup/validate", { provider, token }),
 
   notionPages: (token: string) =>
     request<{ pages: { page_id: string; title: string }[] }>(

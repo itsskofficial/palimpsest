@@ -166,9 +166,27 @@ def register(app, st) -> None:
         try:
             if provider == "notion":
                 from palimpsest.notion.client import NotionClient
+                from palimpsest.onboard import _shared_pages
 
-                who = NotionClient(token).whoami()
-                return {"ok": True, "detail": who.get("name") or "your integration"}
+                client = NotionClient(token)
+                who = client.whoami()
+                # A token that can see nothing passes `whoami` perfectly well, because
+                # authenticating and being granted access are two different things in
+                # Notion. Checking only the first meant the wizard accepted the token,
+                # walked on to "pick a page", and showed an empty list with no
+                # explanation -- at exactly the step its own instructions call the one
+                # everyone misses. So the question asked here is the useful one: can
+                # this integration actually see a page?
+                shared = len(_shared_pages(client, limit=1))
+                return {
+                    "ok": True,
+                    "detail": who.get("name") or "your integration",
+                    "shared_pages": shared,
+                    "warning": None if shared else (
+                        "That token works, but the integration cannot see any pages "
+                        "yet. In Notion, open the page you want it to work in, then "
+                        "⋯ → Connections → and pick this integration."),
+                }
             if provider == "telegram":
                 from palimpsest import telegram as tg
 
