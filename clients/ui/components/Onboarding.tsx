@@ -29,7 +29,21 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const go = (s: StepId) => setStep(s);
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-6 py-16">
+    <div className="relative z-10 mx-auto flex min-h-screen max-w-xl flex-col justify-center px-6 py-16">
+      {/*
+        The wordmark belongs on the first screen somebody ever sees. Without it the
+        window opens on an unattributed sentence, which reads less like arriving
+        somewhere and more like a dialog that lost its parent.
+      */}
+      <motion.p
+        initial={{ opacity: 0, y: -6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className="mb-8 bg-gradient-to-br from-ink via-ink to-sepia bg-clip-text font-display text-xl font-semibold tracking-tight text-transparent"
+      >
+        palimpsest
+      </motion.p>
+
       <Progress index={idx} total={ORDER.length - 1} />
 
       <AnimatePresence mode="wait">
