@@ -289,6 +289,7 @@ def test_a_pdf_anchors_each_claim_to_the_page_it_came_from(tmp_path):
 
 
 def test_a_pdf_that_is_not_a_pdf_fails_with_something_readable(tmp_path):
+    pytest.importorskip("pypdf")
     from palimpsest.ingest.files import from_pdf
 
     path = tmp_path / "not-really.pdf"
