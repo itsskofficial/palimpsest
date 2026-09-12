@@ -233,7 +233,8 @@ def test_an_actually_unconfigured_machine_still_gets_the_wizard():
     from palimpsest.onboard import is_configured
 
     assert not is_configured(Settings())
-    assert not is_configured(Settings(notion_token="ntn_x", anthropic_api_key="sk-x"))
+    assert not is_configured(Settings(notion_token="ntn_x"))       # nothing to think with
+    assert not is_configured(Settings(anthropic_api_key="sk-x"))   # nowhere to write
 
 
 def test_a_reset_that_cannot_delete_says_what_to_do(tmp_path, monkeypatch):

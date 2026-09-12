@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
+import { Markdown } from "@/lib/markdown";
 
 type Msg = { role: "you" | "pal"; text: string; tools?: string[] };
 
@@ -85,9 +86,7 @@ export function AskPanel() {
                       {Array.from(new Set(m.tools)).join(" · ")}
                     </p>
                   )}
-                  <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-ink">
-                    {m.text}
-                  </p>
+                  <Markdown text={m.text} />
                 </div>
               )}
             </motion.div>

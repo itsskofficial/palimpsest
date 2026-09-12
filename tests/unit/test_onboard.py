@@ -90,14 +90,34 @@ def test_rewriting_preserves_keys_not_asked_about(isolated):
     assert "g_secret" in body                    # not clobbered
 
 
-def test_is_configured_needs_all_four_essentials():
-    base = dict(notion_token="n", anthropic_api_key="a", telegram_token="t",
-                telegram_allowed_chats=(42,))
-    assert onboard.is_configured(Settings(**base)) is True
-    for drop in ("notion_token", "anthropic_api_key", "telegram_token"):
-        partial = {**base, drop: None}
-        assert onboard.is_configured(Settings(**partial)) is False
-    assert onboard.is_configured(Settings(**{**base, "telegram_allowed_chats": ()})) is False
+def test_is_configured_needs_somewhere_to_write_and_something_to_think():
+    """Those two, and nothing else. The desktop app shows the wizard whenever this is
+    false, so anything named here is something a person cannot get past."""
+    assert onboard.is_configured(
+        Settings(notion_token="n", anthropic_api_key="a")) is True
+
+    assert onboard.is_configured(Settings(anthropic_api_key="a")) is False
+    assert onboard.is_configured(Settings(notion_token="n")) is False
+
+
+def test_a_vault_is_as_configured_as_a_notion_account():
+    """A markdown vault is a complete workspace -- it mirrors, classifies, applies and
+    undoes. Requiring `has_notion` sent every vault user to a wizard asking for a token
+    their backend does not use."""
+    assert onboard.is_configured(Settings(backend="markdown", vault_path="/notes",
+                                          anthropic_api_key="a")) is True
+    assert onboard.is_configured(Settings(backend="markdown", vault_path=None,
+                                          anthropic_api_key="a")) is False
+
+
+def test_skipping_telegram_does_not_leave_you_unconfigured():
+    """The wizard's Telegram step offers "Skip". Taking it left the app unconfigured, so
+    finishing setup returned you to the start of setup -- and there was no way out but
+    to go and create a bot. Telegram is one of three surfaces and the optional one."""
+    without_a_bot = Settings(notion_token="n", anthropic_api_key="a",
+                             telegram_token=None, telegram_allowed_chats=())
+
+    assert onboard.is_configured(without_a_bot) is True
 
 
 def test_a_malformed_config_file_is_ignored_not_fatal(isolated):

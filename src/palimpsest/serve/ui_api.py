@@ -77,12 +77,21 @@ def register(app, st) -> None:
         s = st.settings
         return {
             "configured": is_configured(s),
+            # `workspace` is the question the app actually needs answered -- a vault is
+            # as complete a workspace as a Notion account. `notion` and `root` stay for
+            # the wizard, which walks those two steps, but they are false-and-fine on a
+            # vault rather than false-and-missing.
+            "backend": s.backend,
             "steps": {
                 "model": bool(s.has_model),
+                "workspace": bool(s.has_workspace),
                 "notion": bool(s.has_notion),
                 "root": bool(s.notion_root_pages),
                 "telegram_token": bool(s.telegram_token),
-                "telegram_paired": bool(s.telegram_allowed_chats),
+                # Pairing without a bot is not pairing. Reporting it as done left the
+                # wizard showing a green tick beside a step that had not happened.
+                "telegram_paired": bool(s.telegram_token
+                                        and s.telegram_allowed_chats),
             },
             "optional": {
                 "transcription": s.transcriber,

@@ -82,9 +82,40 @@ def test_setup_state_says_which_steps_are_done(client):
     body = client.get("/v1/setup/state").json()
 
     assert body["configured"] is False
-    assert body["steps"] == {"model": False, "notion": False, "root": False,
-                             "telegram_token": False, "telegram_paired": False}
+    assert body["steps"] == {"model": False, "workspace": False, "notion": False,
+                             "root": False, "telegram_token": False,
+                             "telegram_paired": False}
+    assert body["backend"] == "notion"
     assert isinstance(body["problems"], list)
+
+
+def test_a_tick_is_not_shown_beside_a_step_that_did_not_happen(client, monkeypatch):
+    """`telegram_paired` read the allowlist alone, so a chat id left in the config from
+    a bot that has since been removed showed the pairing step as done -- with no bot."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    client.state.settings = Settings(telegram_token=None,
+                                     telegram_allowed_chats=(42,))
+
+    steps = client.get("/v1/setup/state").json()["steps"]
+
+    assert steps["telegram_paired"] is False
+
+
+def test_a_configured_vault_install_is_not_sent_to_the_wizard(tmp_path, monkeypatch):
+    """The desktop app renders onboarding whenever `configured` is false, and it was
+    false for a vault no matter what -- a working install held in a setup form forever,
+    being asked for a Notion token its backend does not use."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'v.db'}",
+                        artifact_url=f"file://{tmp_path / 'a'}",
+                        backend="markdown", vault_path=str(tmp_path),
+                        anthropic_api_key="sk-ant-x")
+    with TestClient(create_app(AppState(settings=settings))) as c:
+        body = c.get("/v1/setup/state").json()
+
+    assert body["configured"] is True
+    assert body["backend"] == "markdown"
+    assert body["steps"]["workspace"] is True
 
 
 def test_validate_refuses_an_empty_token_without_calling_anything(client):

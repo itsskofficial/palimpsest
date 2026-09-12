@@ -24,6 +24,7 @@ bounded by a turn cap and, later, by compaction.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -156,10 +157,48 @@ def run_turn(ctx: ToolContext, user_text: str, *, session_id: str,
         turn.update(output={"text": reply.text[:2000], "steps": reply.steps,
                             "tools": reply.tool_calls, "approvals": reply.approvals})
 
+    reply.text = ground_links(ctx.store, reply.text)
+
     # Persist the assistant's final text for the next turn's continuity.
     if reply.text:
         ctx.store.add_message(session_id, "assistant", reply.text, trace_id=reply.trace_id)
     return reply
+
+
+#: A markdown link in a reply. Only these are checked -- bare URLs in prose are left
+#: alone, since they are usually being quoted from a source rather than offered as a
+#: citation.
+_LINK = re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")
+
+
+def ground_links(store, text: str) -> str:
+    """Demote any link in a reply that does not point at a page in the mirror.
+
+    The Ask panel says "answers come from what you've actually written, with page
+    links", and until this existed that second half was a hope. A model asked to cite
+    `[Title](url)` will sometimes construct a plausible one instead of copying the one
+    it was given -- a local 7B did exactly that, inventing `https://example.com/...` for
+    three pages, one of which does not exist. Rendered as an anchor, a fabricated link
+    is worse than a page id: an id is visibly internal, where a link looks checked.
+
+    So a link survives only if its target is a page URL this store knows. Everything
+    else keeps its text and loses its href, which costs a real citation nothing and
+    costs an invented one all of its authority.
+    """
+    if not text or "](" not in text:
+        return text
+
+    known = {u for u in (p.get("url") for p in (store.get_pages() or [])) if u}
+    if not known:
+        # An empty mirror cannot vouch for anything, and turning every link into plain
+        # text would be a worse answer than leaving it. Nothing to check against.
+        return text
+
+    def keep(match: re.Match) -> str:
+        label, href = match.group(1), match.group(2)
+        return match.group(0) if href in known else label
+
+    return _LINK.sub(keep, text)
 
 
 def _current_trace_id() -> str | None:

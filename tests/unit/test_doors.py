@@ -184,8 +184,9 @@ def test_setup_state_on_a_fresh_instance_reports_nothing_configured(ui):
     body = ui.get("/v1/setup/state").json()
 
     assert body["configured"] is False
-    assert body["steps"] == {"model": False, "notion": False, "root": False,
-                             "telegram_token": False, "telegram_paired": False}
+    assert body["steps"] == {"model": False, "workspace": False, "notion": False,
+                             "root": False, "telegram_token": False,
+                             "telegram_paired": False}
     assert any("NOTION_TOKEN" in p for p in body["problems"])
     assert body["apply"] is False
 

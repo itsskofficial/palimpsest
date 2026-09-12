@@ -573,3 +573,78 @@ def test_rejecting_a_patch_records_the_reason(ctx):
 
 def test_undo_on_a_patch_that_was_never_applied_says_so(ctx):
     assert "error" in _call(ctx, "undo_patch", patch_id="pch_nothing")
+
+
+# ---------------------------------------------------------------------------
+# citations the reader can trust
+# ---------------------------------------------------------------------------
+
+
+class _Mirror:
+    """A store that knows two pages, one of them without a URL."""
+
+    def __init__(self, urls=("https://notion.so/sleep", "https://notion.so/clipping")):
+        self._urls = urls
+
+    def get_pages(self):
+        return [{"url": u} for u in self._urls] + [{"url": None}]
+
+
+def test_a_link_to_a_page_in_the_mirror_survives():
+    from palimpsest.agent.loop import ground_links
+
+    text = "That is on [Sleep and memory](https://notion.so/sleep)."
+
+    assert ground_links(_Mirror(), text) == text
+
+
+def test_a_link_the_model_invented_keeps_its_words_and_loses_its_href():
+    """The Ask panel promises "answers come from what you've actually written, with page
+    links", and a model asked to cite `[Title](url)` will sometimes construct a plausible
+    one rather than copy the one it was handed -- a local 7B did exactly that, inventing
+    `example.com` URLs for three pages, one of which does not exist. Rendered as an
+    anchor, an invented link is worse than a page id: an id is visibly internal, where a
+    link looks checked."""
+    from palimpsest.agent.loop import ground_links
+
+    out = ground_links(
+        _Mirror(), "See [Memory reconsolidation](https://example.com/page_id_mp_1).")
+
+    assert out == "See Memory reconsolidation."
+
+
+def test_the_real_citation_in_a_mixed_answer_is_not_collateral():
+    from palimpsest.agent.loop import ground_links
+
+    out = ground_links(_Mirror(),
+                       "[Sleep](https://notion.so/sleep) and [Ghost](https://x.test/g)")
+
+    assert out == "[Sleep](https://notion.so/sleep) and Ghost"
+
+
+def test_an_empty_mirror_vouches_for_nothing_and_changes_nothing():
+    """Stripping every link because there is nothing to check against would make a fresh
+    install's answers worse, not safer."""
+    from palimpsest.agent.loop import ground_links
+
+    text = "[Anything](https://x.test/p)"
+
+    assert ground_links(_Mirror(urls=()), text) == text
+
+
+def test_a_reply_with_no_links_is_returned_untouched():
+    from palimpsest.agent.loop import ground_links
+
+    for text in ("", "Nothing here.", "A bare https://example.com/p in prose."):
+        assert ground_links(_Mirror(), text) == text
+
+
+def test_a_vault_page_url_is_a_page_url_too():
+    """On a markdown backend the pages are files, and `file://` is what the mirror
+    holds. Checking only for `http` would strip every citation a vault ever produced."""
+    from palimpsest.agent.loop import ground_links
+
+    mirror = _Mirror(urls=("file:///notes/sleep.md",))
+    text = "[Sleep](file:///notes/sleep.md)"
+
+    assert ground_links(mirror, text) == text

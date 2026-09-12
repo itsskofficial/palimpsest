@@ -74,17 +74,26 @@ def _ask(prompt: str, *, secret: bool = False, default: str | None = None,
 
 
 def is_configured(settings) -> bool:
-    """Whether the essentials for the bot to actually do something are present.
+    """Whether the essentials are present: somewhere to write, and something to think.
 
-    A demo is configured by construction. It has a workspace (the sample vault) and it
-    deliberately has no Notion token and no bot, so the old check called it unconfigured
-    and the app opened on a setup wizard -- which is precisely the thing `palimpsest demo`
-    exists to let somebody skip. The first screen of the zero-setup path was a form.
+    Those two, and nothing else. The desktop app shows the setup wizard whenever this is
+    false, so anything named here is something a person cannot get past -- and this used
+    to name Telegram, which is one of three surfaces and the only optional one. The
+    wizard's Telegram step offers "Skip"; taking it left the app unconfigured, so
+    finishing setup returned you to the start of setup. There was no way out but to
+    create a bot.
+
+    It used to name `has_notion` too, which is the same mistake in the other direction:
+    a markdown vault is a complete workspace, and `has_workspace` is the question every
+    write already asks.
+
+    A demo stays configured by construction -- it has the sample vault and deliberately
+    has no token of any kind, and the first screen of the zero-setup path must not be a
+    form.
     """
     if getattr(settings, "environment", "") == "demo":
         return True
-    return bool(settings.has_notion and settings.has_model and settings.telegram_token
-                and settings.telegram_allowed_chats)
+    return bool(settings.has_workspace and settings.has_model)
 
 
 # ---------------------------------------------------------------------------
