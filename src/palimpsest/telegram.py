@@ -104,6 +104,17 @@ def _call(token: str, method: str, params: dict | None = None,
     return payload.get("result")
 
 
+def _no_workspace(settings: Any) -> str:
+    """Why there is nothing to read, in the terms of the backend actually configured.
+
+    Telling a vault user that `NOTION_TOKEN` is not set is an instruction they cannot
+    follow, and it sends them looking for a Notion problem they do not have.
+    """
+    if getattr(settings, "backend", "notion") == "markdown":
+        return "`PALIMPSEST_VAULT` is not set, so there is no vault to read."
+    return "`NOTION_TOKEN` is not set."
+
+
 def _md(text: str) -> str:
     """Escape the handful of characters Telegram's legacy Markdown chokes on."""
     for ch in ("_", "*", "`", "["):
@@ -125,7 +136,9 @@ class Bot:
     allowed: frozenset[int] = frozenset()
     _offset: int = 0
     _stop: threading.Event = field(default_factory=threading.Event, repr=False)
-    _seen_jobs: set[str] = field(default_factory=set, repr=False)
+    #: Jobs already reported on, or finished before this process started. Seeded by
+    #: `prime()` so a restart does not re-announce yesterday's work.
+    _reported: set[str] = field(default_factory=set, repr=False)
     _me: dict = field(default_factory=dict, repr=False)
 
     # -- sending ---------------------------------------------------------------
@@ -256,9 +269,8 @@ class Bot:
                 ".ogg" if kind == "voice" else ".mp4")
             path = path.rename(path.with_suffix(guessed))
 
-        job = self.queue.submit(str(path), title=caption or Path(path).stem,
-                                origin=f"telegram:{chat_id}")
-        self._seen_jobs.add(job["job_id"])
+        self.queue.submit(str(path), title=caption or Path(path).stem,
+                          origin=f"telegram:{chat_id}")
         self.send(chat_id, f"📥 `{_md(Path(path).name)}` — reading it now.")
 
     # -- conversation (the agent) ----------------------------------------------
@@ -366,18 +378,17 @@ class Bot:
 
     def cmd_sync(self, chat_id: int) -> None:
         if not self.settings.has_workspace:
-            return self._say(chat_id, "`NOTION_TOKEN` is not set.")
+            return self._say(chat_id, _no_workspace(self.settings))
         self.send(chat_id, "Syncing…")
 
         def work() -> None:
+            from palimpsest import workspace
             from palimpsest.notion import mirror
-            from palimpsest.notion.client import NotionClient
 
             store = self.store_factory()
             try:
                 result = mirror.sync(
-                    NotionClient(self.settings.notion_token or "",
-                                 version=self.settings.notion_version),
+                    workspace.open(self.settings),
                     store, incremental=True,
                     roots=self.settings.notion_root_pages)
                 d = result.as_dict()
@@ -396,8 +407,8 @@ class Bot:
         self.send(chat_id, "Looking at the shape of the workspace…")
 
         def work() -> None:
+            from palimpsest import workspace
             from palimpsest.llm import Model
-            from palimpsest.notion.client import NotionClient
             from palimpsest.organise import organise
 
             store = self.store_factory()
@@ -420,9 +431,7 @@ class Bot:
                 roots = self.settings.notion_root_pages
                 out = approval.gate(
                     store, result.patch, self.settings, chat_id=str(chat_id),
-                    notion_factory=(lambda: NotionClient(
-                        self.settings.notion_token or "",
-                        version=self.settings.notion_version))
+                    notion_factory=(lambda: workspace.open(self.settings))
                     if self.settings.has_workspace else None,
                     summary=f"organise: {result.stats.get('pages_moved', 0)} move(s)")
                 hubs = "\n".join(f"• {h.get('icon','')} {_md(h['name'])}"
@@ -557,6 +566,12 @@ class Bot:
         The queue is deliberately not given a callback into the bot: a worker thread
         that can block on a network call to Telegram is a worker thread that stops
         draining the queue. Polling the job table instead keeps the two independent.
+
+        Every telegram-origin job is reported, not only the ones this bot submitted
+        itself. That used to be the test, and it quietly excluded the most common path
+        on a phone: typing a thought or pasting a link goes to the *agent*, which
+        queues the capture through its own tool, so the job finished and nothing ever
+        came back -- against a module whose whole premise is that it always does.
         """
         store = self.store_factory()
         try:
@@ -566,9 +581,9 @@ class Bot:
                     continue
                 if job["status"] not in ("done", "failed"):
                     continue
-                if job["job_id"] not in self._seen_jobs:
+                if job["job_id"] in self._reported:
                     continue
-                self._seen_jobs.discard(job["job_id"])
+                self._reported.add(job["job_id"])
 
                 chat_id = int(origin.split(":", 1)[1])
                 if job["status"] == "failed":
@@ -639,7 +654,27 @@ class Bot:
                 log.exception("failed handling update %s", update.get("update_id"))
         return len(updates or [])
 
+    def prime(self) -> None:
+        """Note everything that has already finished, so a restart says nothing about it.
+
+        Without this, `report_finished` would re-announce every capture in the table the
+        moment the bot came back up -- forty messages arriving at once, about work the
+        person was told about days ago.
+        """
+        store = self.store_factory()
+        try:
+            for job in store.list_jobs(limit=200):
+                if ((job.get("origin") or "").startswith("telegram:")
+                        and job.get("status") in ("done", "failed")):
+                    self._reported.add(job["job_id"])
+        except Exception as e:  # pragma: no cover - defensive; an empty set is safe
+            log.warning("could not read finished jobs at startup: %s", e)
+        finally:
+            with contextlib.suppress(Exception):
+                store.close()
+
     def run(self) -> None:
+        self.prime()
         self._me = _call(self.token, "getMe") or {}
         log.info("telegram bot @%s is listening (%d paired chat(s))",
                  self._me.get("username", "?"), len(self.allowed))
@@ -648,10 +683,29 @@ class Bot:
                         "and told its id. Message the bot once, then add the id.")
 
         last_report = 0.0
+        conflicts = 0
         while not self._stop.is_set():
             try:
                 self.poll_once()
+                conflicts = 0
             except TelegramError as e:
+                if "409" in str(e):
+                    # Telegram gives one long-poll slot per token, so a second reader
+                    # takes the updates and this one gets 409 forever. It is a common
+                    # mistake -- the desktop app starts a bot and `palimpsest telegram`
+                    # starts another, or the token is shared with some other tool -- and
+                    # "telegram poll failed: ... 409" sends nobody to the right place.
+                    conflicts += 1
+                    if conflicts == 1:
+                        log.error(
+                            "another program is already reading updates for @%s. "
+                            "Telegram only allows one, so this bot will receive "
+                            "nothing until the other stops. Either stop it, or give "
+                            "palimpsest its own bot: message @BotFather, send /newbot, "
+                            "and set TELEGRAM_BOT_TOKEN to the new token.",
+                            self._me.get("username", "this bot"))
+                    self._stop.wait(min(60.0, 5.0 * conflicts))
+                    continue
                 log.error("telegram poll failed: %s", e)
                 self._stop.wait(5.0)
             except (urllib.error.URLError, TimeoutError, OSError) as e:
@@ -671,11 +725,11 @@ class Bot:
 
 def run(settings=None, queue=None) -> None:
     """Start the bot. Blocks until interrupted."""
+    from palimpsest import workspace
     from palimpsest.artifacts import open_artifacts
     from palimpsest.config import Settings
     from palimpsest.jobs import JobQueue, ingest_runner
     from palimpsest.llm import Model
-    from palimpsest.notion.client import NotionClient
     from palimpsest.store import open_store
 
     settings = settings or Settings.load()
@@ -696,8 +750,7 @@ def run(settings=None, queue=None) -> None:
                 model_factory=lambda: Model(settings=settings,
                                             max_tokens=settings.max_tokens),
                 archive=open_artifacts(settings.artifact_url),
-                notion_factory=(lambda: NotionClient(settings.notion_token or "",
-                                                     version=settings.notion_version))
+                notion_factory=(lambda: workspace.open(settings))
                 if settings.has_workspace else None)},
             workers=settings.workers,
         ).start()

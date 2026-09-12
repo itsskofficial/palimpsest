@@ -51,6 +51,24 @@ class FakeTelegram:
         return [m.get("text", "") for m in self.sent]
 
 
+class Kept:
+    """The one test database, wrapped so the bot cannot close it.
+
+    The bot's contract is that it owns whatever `store_factory` hands it and closes it
+    when done -- correct in production, where each call opens a fresh connection. A
+    fixture that wants one in-memory database across several calls has to say so.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def close(self) -> None:
+        pass
+
+
 class FakeQueue:
     def __init__(self):
         self.submitted: list[dict] = []
@@ -67,7 +85,7 @@ def bot(store, monkeypatch):
 
     fake = FakeTelegram()
     monkeypatch.setattr(mod, "_call", fake)
-    b = Bot(token="t", settings=Settings(), store_factory=lambda: store,
+    b = Bot(token="t", settings=Settings(), store_factory=lambda: Kept(store),
             queue=FakeQueue(), allowed=frozenset({42}))
     b.transport = fake  # type: ignore[attr-defined]
     return b
@@ -528,7 +546,6 @@ def _finished(bot, store, **result):
     job_id = new_id("job_")
     store.put_job({"job_id": job_id, "kind": "ingest", "spec": "x",
                    "origin": "telegram:42", "status": "done", "result": result})
-    bot._seen_jobs.add(job_id)
     return job_id
 
 
@@ -588,7 +605,6 @@ def test_a_failed_capture_reports_the_error(bot, store):
     store.put_job({"job_id": job_id, "kind": "ingest", "spec": "x",
                    "origin": "telegram:42", "status": "failed",
                    "error": "that PDF is encrypted"})
-    bot._seen_jobs.add(job_id)
 
     bot.report_finished()
 
@@ -613,7 +629,6 @@ def test_a_capture_from_another_surface_is_not_pushed_to_your_phone(bot, store):
     job_id = new_id("job_")
     store.put_job({"job_id": job_id, "kind": "ingest", "spec": "x", "origin": "ui",
                    "status": "done", "result": {"claims": 1}})
-    bot._seen_jobs.add(job_id)
 
     bot.report_finished()
 
@@ -675,3 +690,200 @@ def test_markdown_that_would_break_telegram_is_escaped():
     assert _md("snake_case") == "snake" + backslash + "_case"
     assert _md("*bold*") == backslash + "*bold" + backslash + "*"
     assert _md("a [link]") == "a " + backslash + "[link]"
+
+
+# ---------------------------------------------------------------------------
+# the backend the bot is actually pointed at
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def vault_bot(store, monkeypatch, tmp_path):
+    """A bot on a markdown vault. Every surface has to work on both backends; this one
+    was the last that did not."""
+    import palimpsest.telegram as mod
+
+    fake = FakeTelegram()
+    monkeypatch.setattr(mod, "_call", fake)
+    settings = Settings(backend="markdown", vault_path=str(tmp_path))
+    b = Bot(token="t", settings=settings, store_factory=lambda: Kept(store),
+            queue=FakeQueue(), allowed=frozenset({42}))
+    b.transport = fake  # type: ignore[attr-defined]
+    return b
+
+
+def test_sync_on_a_vault_reads_the_vault_rather_than_calling_notion(vault_bot, tmp_path,
+                                                                    monkeypatch):
+    """`/sync` built a `NotionClient` outright. On a vault that is a call to
+    api.notion.com with an empty token -- so the one command that refreshes the mirror
+    failed for every vault user, with an error about Notion they could do nothing with."""
+    import palimpsest.workspace as ws
+
+    (tmp_path / "a-note.md").write_text(
+        "# A note" + chr(10) * 2 + "Something written down." + chr(10),
+        encoding="utf-8")
+    opened: list = []
+    real_open = ws.open
+    monkeypatch.setattr(ws, "open",
+                        lambda settings: opened.append(real_open(settings)) or opened[-1])
+
+    vault_bot.cmd_sync(42)
+
+    assert _wait_for("Synced", vault_bot), vault_bot.transport.texts
+    assert opened, "the backend-aware door was never used"
+    assert any("Synced 1 page(s)" in t for t in vault_bot.transport.texts)
+
+
+def test_sync_with_no_vault_configured_says_which_setting_is_missing(store, monkeypatch):
+    """Telling a vault user that `NOTION_TOKEN` is not set is an instruction they cannot
+    follow, and it sends them hunting for a Notion problem they do not have."""
+    import palimpsest.telegram as mod
+
+    fake = FakeTelegram()
+    monkeypatch.setattr(mod, "_call", fake)
+    bot = Bot(token="t", settings=Settings(backend="markdown", vault_path=None),
+              store_factory=lambda: Kept(store), queue=FakeQueue(),
+              allowed=frozenset({42}))
+
+    bot.cmd_sync(42)
+
+    assert "PALIMPSEST_VAULT" in fake.texts[0]
+    assert "NOTION_TOKEN" not in fake.texts[0]
+
+
+def test_sync_on_notion_with_no_token_still_names_notion(bot):
+    bot.settings = Settings(backend="notion", notion_token=None)
+
+    bot.cmd_sync(42)
+
+    assert "NOTION_TOKEN" in bot.transport.texts[0]
+
+
+# ---------------------------------------------------------------------------
+# reporting back — the promise the module is built on
+# ---------------------------------------------------------------------------
+
+
+def test_a_capture_the_agent_started_is_reported_too(bot, store):
+    """The most common path on a phone: type a thought, or paste a link, and the text
+    goes to the agent, which queues the capture through its own tool. Reporting only the
+    jobs the bot submitted itself meant those finished in silence -- in a module whose
+    entire premise is that something always comes back."""
+    store.put_job({"job_id": new_id("job_"), "kind": "ingest", "spec": "x",
+                   "origin": "telegram:42", "status": "done",
+                   "result": {"source": {"title": "A post the agent fetched"},
+                              "claims": 2, "patch": {"by_relation": {"new": 2}}}})
+
+    bot.report_finished()
+
+    assert "A post the agent fetched" in "\n".join(bot.transport.texts)
+
+
+def test_a_restart_does_not_re_announce_everything_that_ever_finished(bot, store):
+    """Forty summaries arriving at once, about work the person was told about days ago,
+    is how a capture tool teaches you to mute it."""
+    for i in range(5):
+        store.put_job({"job_id": new_id("job_"), "kind": "ingest", "spec": "x",
+                       "origin": "telegram:42", "status": "done",
+                       "result": {"claims": 1, "source": {"title": f"Old {i}"}}})
+
+    bot.prime()
+    bot.report_finished()
+
+    assert bot.transport.sent == []
+
+
+def test_work_that_finishes_after_the_restart_is_still_reported(bot, store):
+    """The other half: priming must not silence everything from then on."""
+    store.put_job({"job_id": new_id("job_"), "kind": "ingest", "spec": "x",
+                   "origin": "telegram:42", "status": "done",
+                   "result": {"claims": 1, "source": {"title": "Before"}}})
+    bot.prime()
+
+    store.put_job({"job_id": new_id("job_"), "kind": "ingest", "spec": "y",
+                   "origin": "telegram:42", "status": "done",
+                   "result": {"claims": 1, "source": {"title": "After"}}})
+    bot.report_finished()
+
+    text = "\n".join(bot.transport.texts)
+    assert "After" in text
+    assert "Before" not in text
+
+
+def test_a_job_still_running_is_not_reported_as_finished(bot, store):
+    store.put_job({"job_id": new_id("job_"), "kind": "ingest", "spec": "x",
+                   "origin": "telegram:42", "status": "running"})
+
+    bot.report_finished()
+
+    assert bot.transport.sent == []
+
+
+def test_the_report_goes_to_the_chat_that_sent_it(bot, store):
+    """The origin carries the chat. Reporting to the wrong one shows somebody else's
+    notes to somebody else."""
+    store.put_job({"job_id": new_id("job_"), "kind": "ingest", "spec": "x",
+                   "origin": "telegram:42", "status": "done",
+                   "result": {"claims": 1, "source": {"title": "Mine"}}})
+
+    bot.report_finished()
+
+    assert {m["chat_id"] for m in bot.transport.sent} == {42}
+
+
+def test_a_source_that_produced_nothing_says_so_rather_than_going_quiet(bot, store):
+    """Silence reads as "it didn't work". "Nothing worth keeping" reads as a judgement,
+    which is what it is."""
+    store.put_job({"job_id": new_id("job_"), "kind": "ingest", "spec": "x",
+                   "origin": "telegram:42", "status": "done",
+                   "result": {"claims": 0, "source": {"title": "A thin page"}}})
+
+    bot.report_finished()
+
+    assert "Nothing worth keeping" in "\n".join(bot.transport.texts)
+
+
+def _wait_for(needle: str, bot, timeout: float = 10.0) -> bool:
+    """Several commands answer from a worker thread, so the reply arrives after the
+    call returns."""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(needle in t for t in bot.transport.texts):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_a_second_reader_of_the_same_token_is_explained_once_not_every_five_seconds(
+        bot, monkeypatch, caplog):
+    """Telegram gives one long-poll slot per token, so a bot started twice -- or a token
+    shared with another tool -- gets 409 forever and receives nothing. "telegram poll
+    failed: getUpdates returned 409" sends nobody anywhere useful, and repeating it every
+    five seconds buries whatever else is in the log."""
+    import logging
+
+    import palimpsest.telegram as mod
+
+    calls = {"n": 0}
+
+    def conflicted(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] > 3:
+            bot.stop()
+        raise mod.TelegramError(
+            'getUpdates returned 409: {"description": "Conflict: terminated by other '
+            'getUpdates request"}')
+
+    monkeypatch.setattr(bot, "poll_once", conflicted)
+    monkeypatch.setattr(bot._stop, "wait", lambda timeout=None: None)
+    monkeypatch.setattr(mod, "_call", lambda *a, **kw: {"username": "a_bot"})
+
+    with caplog.at_level(logging.ERROR, logger="palimpsest.telegram"):
+        bot.run()
+
+    explained = [r for r in caplog.records if "already reading updates" in r.getMessage()]
+    assert len(explained) == 1, "said once, not once per retry"
+    assert "@a_bot" in explained[0].getMessage()
+    assert "BotFather" in explained[0].getMessage(), "and it says what to do about it"
