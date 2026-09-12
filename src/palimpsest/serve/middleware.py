@@ -200,7 +200,16 @@ def install(app, settings, metrics: Metrics) -> None:
             expose_headers=["X-Request-ID"],
         )
 
+    # A pasted document is the reason for a cap at all, and 32 MB of JSON is already a
+    # great deal of prose. A *file drop* is a different shape: the desktop window's main
+    # gesture is nine PDFs at once, and a long recording is 64 MB on its own. With one
+    # cap for both, `upload.py`'s per-file limit was unreachable -- anything between the
+    # two was refused by this with "request body exceeds 32 MB", which does not say
+    # which of the nine to leave out, and the per-file message that does say it could
+    # never fire.
     max_body = 32 * 1024 * 1024
+    max_upload = 256 * 1024 * 1024
+    upload_paths = ("/v1/ingest/upload",)
 
     @app.middleware("http")
     async def _observe(request: Request, call_next):
@@ -210,10 +219,11 @@ def install(app, settings, metrics: Metrics) -> None:
 
         # -- body limit ----------------------------------------------------
         length = request.headers.get("content-length")
-        if length and length.isdigit() and int(length) > max_body:
+        cap = (max_upload if request.url.path in upload_paths else max_body)
+        if length and length.isdigit() and int(length) > cap:
             return JSONResponse(
                 status_code=413,
-                content={"detail": f"request body exceeds {max_body // (1024 * 1024)} MB"},
+                content={"detail": f"request body exceeds {cap // (1024 * 1024)} MB"},
                 headers={"X-Request-ID": request_id},
             )
 

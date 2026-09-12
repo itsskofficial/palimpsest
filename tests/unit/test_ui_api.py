@@ -19,6 +19,7 @@ The rest is about what the UI is *told*. A route that returns 200 with a body me
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -648,3 +649,174 @@ def test_a_failed_job_frame_carries_the_error():
 
     assert event["error"] == "that PDF is encrypted"
     assert event["claims"] is None
+
+
+# ---------------------------------------------------------------------------
+# the drop zone
+#
+# The desktop window's main gesture: drag nine PDFs onto it and walk away. The bytes go
+# to a temp file and the *path* is queued, because a 40 MB PDF in a database column is a
+# database problem and on disk it is just a file the adapter already knows how to open.
+#
+# The filename comes from the client, which makes it the one piece of attacker-controlled
+# text that reaches the filesystem.
+# ---------------------------------------------------------------------------
+
+
+def test_a_dropped_file_is_written_and_queued_by_path(client, tmp_path):
+    response = client.post("/v1/ingest/upload",
+                           files={"files": ("paper.pdf", b"%PDF-1.4 body", "application/pdf")})
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["count"] == 1
+    job = client.state.store.get_job(body["jobs"][0]["job_id"])
+    assert job["status"] == "queued"
+    assert Path(job["spec"]).read_bytes() == b"%PDF-1.4 body"
+    Path(job["spec"]).unlink(missing_ok=True)
+
+
+def test_nine_files_become_nine_jobs(client):
+    """One job each, so one bad PDF costs its own job and not the other eight."""
+    response = client.post("/v1/ingest/upload", files=[
+        ("files", (f"paper-{i}.pdf", b"%PDF-1.4", "application/pdf")) for i in range(9)
+    ])
+
+    body = response.json()
+    assert body["count"] == 9
+    assert len({j["job_id"] for j in body["jobs"]}) == 9
+    for job in body["jobs"]:
+        Path(client.state.store.get_job(job["job_id"])["spec"]).unlink(missing_ok=True)
+
+
+def test_a_filename_that_climbs_out_of_the_directory_is_reduced_to_its_name(client):
+    """A client is free to send `../../.ssh/authorized_keys`, and joining that onto a
+    directory writes wherever it likes. Only the basename is ever used."""
+    response = client.post("/v1/ingest/upload", files={
+        "files": ("../../../.ssh/authorized_keys", b"ssh-rsa AAAA", "text/plain")})
+
+    assert response.status_code == 202
+    spec = Path(client.state.store.get_job(
+        response.json()["jobs"][0]["job_id"])["spec"])
+    assert spec.parent == client.state.uploads
+    assert spec.name.endswith("authorized_keys")
+    assert ".." not in str(spec)
+    spec.unlink(missing_ok=True)
+
+
+def test_a_part_that_is_not_a_file_is_refused_before_anything_is_written(client):
+    """FastAPI rejects a nameless part as malformed, which is the right answer and worth
+    pinning: the alternative is a zero-byte file queued as a source."""
+    response = client.post("/v1/ingest/upload",
+                           files={"files": ("", b"some bytes", "text/plain")})
+
+    assert response.status_code == 422
+    assert client.state.store.list_jobs(limit=5) == []
+
+
+def test_a_filename_that_is_only_dots_falls_back_rather_than_writing_to_the_directory(
+        client):
+    """`Path("..").name` is the empty string, so without the fallback the target is the
+    uploads directory itself."""
+    response = client.post("/v1/ingest/upload",
+                           files={"files": ("..", b"some bytes", "text/plain")})
+
+    assert response.status_code == 202
+    spec = Path(client.state.store.get_job(
+        response.json()["jobs"][0]["job_id"])["spec"])
+    assert spec.is_file()
+    assert spec.parent == client.state.uploads
+    spec.unlink(missing_ok=True)
+
+
+def test_an_upload_may_be_larger_than_a_pasted_document(client):
+    """The body cap exists for a pasted document, where 32 MB is a great deal of prose.
+    A file drop is a different shape -- nine PDFs at once, or one long recording -- and
+    with a single cap for both, the per-file limit was unreachable and the message that
+    says which file to leave out could never fire."""
+    from palimpsest.serve.upload import MAX_FILE_BYTES
+
+    response = client.post(
+        "/v1/ingest/upload",
+        files={"files": ("x.pdf", b"%PDF", "application/pdf")},
+        headers={"Content-Length": str(MAX_FILE_BYTES + 1024)})
+
+    assert response.status_code != 413
+
+
+def test_a_pasted_document_is_still_capped_at_the_smaller_size(client):
+    response = client.post("/v1/ingest", json={"text": "x"},
+                           headers={"Content-Length": str(64 * 1024 * 1024)})
+
+    assert response.status_code == 413
+    assert "32 MB" in response.json()["detail"]
+
+
+def test_a_file_over_the_limit_is_refused_by_name(client):
+    """The middleware caps the whole body; this is the per-file message, which is the
+    one that says which file to leave out of the drop."""
+    from palimpsest.serve.upload import MAX_FILE_BYTES
+
+    response = client.post("/v1/ingest/upload", files={
+        "files": ("enormous.mp4", b"\x00" * (MAX_FILE_BYTES + 1), "video/mp4")})
+
+    assert response.status_code == 413
+    detail = response.json()["detail"]
+    assert "enormous.mp4" in detail
+    assert "64 MB" in detail
+
+
+def test_the_title_defaults_to_the_filename_without_its_extension(client):
+    """`paper.pdf` in the activity feed is a filename; `paper` is a title. The feed is
+    read while nine of these are in flight."""
+    response = client.post("/v1/ingest/upload", files={
+        "files": ("A Paper On Clipping.pdf", b"%PDF", "application/pdf")})
+
+    job = client.state.store.get_job(response.json()["jobs"][0]["job_id"])
+    assert job["title"] == "A Paper On Clipping"
+    Path(job["spec"]).unlink(missing_ok=True)
+
+
+def test_a_given_title_and_origin_are_kept(client):
+    """The origin is what routes an approval back to whoever dropped the file."""
+    response = client.post(
+        "/v1/ingest/upload",
+        files={"files": ("x.pdf", b"%PDF", "application/pdf")},
+        data={"title": "Standup notes", "origin": "telegram:42",
+              "url": "https://example.com/p"})
+
+    job = client.state.store.get_job(response.json()["jobs"][0]["job_id"])
+    assert job["title"] == "Standup notes"
+    assert job["origin"] == "telegram:42"
+    assert job["url"] == "https://example.com/p"
+    Path(job["spec"]).unlink(missing_ok=True)
+
+
+def test_two_files_with_the_same_name_do_not_overwrite_each_other(client):
+    """Dropping `scan.pdf` twice is ordinary. Sharing a path would silently ingest one
+    file twice and lose the other."""
+    specs = []
+    for _ in range(2):
+        response = client.post("/v1/ingest/upload", files={
+            "files": ("scan.pdf", b"%PDF", "application/pdf")})
+        specs.append(client.state.store.get_job(
+            response.json()["jobs"][0]["job_id"])["spec"])
+
+    assert specs[0] != specs[1]
+    for spec in specs:
+        Path(spec).unlink(missing_ok=True)
+
+
+def test_uploads_land_where_the_cleanup_step_will_find_them(client):
+    """`_cleanup_temp` deletes a temp upload once its bytes are archived, and it only
+    touches paths under palimpsest's own temp directories. A file written anywhere else
+    accumulates for as long as the app is installed."""
+    response = client.post("/v1/ingest/upload", files={
+        "files": ("paper.pdf", b"%PDF", "application/pdf")})
+    spec = client.state.store.get_job(response.json()["jobs"][0]["job_id"])["spec"]
+
+    from palimpsest.jobs import _cleanup_temp
+
+    assert "palimpsest-uploads" in Path(spec).parts
+    _cleanup_temp(spec)
+    assert not Path(spec).exists()
