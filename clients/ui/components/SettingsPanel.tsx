@@ -20,6 +20,20 @@ const GROUPS: {
     ],
   },
   {
+    // Notion is the default and the reason most people are here, so the alternative
+    // lives below it rather than in the wizard. But it has to live somewhere: until
+    // these two were writable, pointing the app at a folder of notes meant editing a
+    // config file by hand, which is not a thing a desktop app should ask for.
+    title: "Or a folder of markdown files",
+    blurb:
+      "Leave these empty to use Notion. Set both to work on local notes instead — an " +
+      "Obsidian vault, a git repo, anything with .md files in it.",
+    keys: [
+      { k: "PALIMPSEST_BACKEND", label: "Backend", hint: "notion (default) or markdown" },
+      { k: "PALIMPSEST_VAULT", label: "Vault folder", hint: "the folder your notes are in" },
+    ],
+  },
+  {
     title: "Voice notes and audio",
     blurb: "Any one of these lets you send recordings. Optional.",
     keys: [
@@ -38,6 +52,10 @@ const GROUPS: {
     ],
   },
 ];
+
+//: Not secrets. Rendered as ordinary text, because a masked folder path is a field
+//: nobody can check, and its saved value never appears in the placeholder either.
+const PLAIN = new Set(["PALIMPSEST_BACKEND", "PALIMPSEST_VAULT"]);
 
 export function SettingsPanel({
   setup,
@@ -107,7 +125,7 @@ export function SettingsPanel({
                   {hint && <p className="text-[11.5px] text-faint">{hint}</p>}
                 </div>
                 <input
-                  type={k.includes("ROOTS") ? "text" : "password"}
+                  type={PLAIN.has(k) || k.includes("ROOTS") ? "text" : "password"}
                   value={edits[k] ?? ""}
                   onChange={(e) => setEdits((s) => ({ ...s, [k]: e.target.value }))}
                   placeholder={present[k] ? values[k] || "saved" : "not set"}

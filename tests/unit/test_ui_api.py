@@ -295,6 +295,28 @@ def test_clearing_one_key_leaves_the_others_alone(client, config_file):
     assert "TELEGRAM_BOT_TOKEN" not in body
 
 
+def test_the_vault_backend_is_reachable_from_the_settings_screen(client, config_file,
+                                                                tmp_path):
+    """Until these two were writable, pointing the desktop app at a folder of notes
+    meant editing a config file by hand -- so the backend the demo runs on, and the one
+    that needs no account anywhere, could not be chosen from the surface most people
+    will ever use."""
+    response = client.post("/v1/settings", json={"values": {
+        "PALIMPSEST_BACKEND": "markdown", "PALIMPSEST_VAULT": str(tmp_path)}})
+
+    assert response.status_code == 200
+    assert client.state.settings.backend == "markdown"
+    assert client.state.settings.vault_path == str(tmp_path)
+    assert client.get("/v1/setup/state").json()["steps"]["workspace"] is True
+
+
+def test_a_folder_path_is_returned_in_full_rather_than_redacted(client, tmp_path):
+    """A masked path is a field nobody can check. It is not a credential."""
+    client.post("/v1/settings", json={"values": {"PALIMPSEST_VAULT": str(tmp_path)}})
+
+    assert client.get("/v1/settings").json()["values"]["PALIMPSEST_VAULT"] == str(tmp_path)
+
+
 def test_an_empty_payload_is_still_refused(client):
     assert client.post("/v1/settings", json={"values": {}}).status_code == 422
 

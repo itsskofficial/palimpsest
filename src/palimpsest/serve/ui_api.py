@@ -40,6 +40,10 @@ __all__ = ["register"]
 #: write from a browser is a way to set `PALIMPSEST_APPLY=1` on someone's behalf.
 WRITABLE = {
     "ANTHROPIC_API_KEY", "NOTION_TOKEN", "PALIMPSEST_NOTION_ROOTS",
+    # Which workspace, and where. Without these the markdown backend is reachable only
+    # by editing a file by hand -- so the desktop app, which is the surface most people
+    # will ever use, could not point itself at a folder of notes at all.
+    "PALIMPSEST_BACKEND", "PALIMPSEST_VAULT",
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHATS",
     "GROQ_API_KEY", "DEEPGRAM_API_KEY", "SARVAM_API_KEY", "FIRECRAWL_API_KEY",
     "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL",
@@ -297,7 +301,8 @@ def register(app, st) -> None:
         values = {k: redact(os.environ.get(k, ""), k) for k in sorted(WRITABLE)}
         # These two are not secrets and the UI needs their real values to show state.
         for plain in ("PALIMPSEST_APPLY", "PALIMPSEST_AUTONOMY",
-                      "PALIMPSEST_NOTION_ROOTS", "TELEGRAM_ALLOWED_CHATS"):
+                      "PALIMPSEST_NOTION_ROOTS", "TELEGRAM_ALLOWED_CHATS",
+                      "PALIMPSEST_BACKEND", "PALIMPSEST_VAULT"):
             values[plain] = os.environ.get(plain, "")
         return {"values": values, "present": present,
                 "config_path": str(config_path()),
