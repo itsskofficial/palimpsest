@@ -100,10 +100,14 @@ markers = [
     "api: needs a live Anthropic key and network access",
     "notion: needs a live Notion integration token",
     "serve: needs the serve extra (fastapi + httpx)",
+    "browser: drives a real Chrome against a running server (see tests/e2e)",
     "postgres: needs a reachable Postgres at PALIMPSEST_TEST_POSTGRES_URL",
     "supabase_stack: needs the local Supabase stack (python scripts/dev.py up)",
 ]
-addopts = "-m 'not api and not notion and not postgres' --strict-markers"
+# `browser` is excluded by default so a plain `pytest` does not launch Chrome and wait
+# on a server somebody may not have running. Run it deliberately: `pytest tests/e2e -m
+# browser`.
+addopts = "-m 'not api and not notion and not postgres and not browser' --strict-markers"
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]
