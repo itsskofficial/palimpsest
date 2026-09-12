@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Iterable
 
 from palimpsest.config import config_path
 
@@ -307,8 +308,14 @@ def _existing_values(settings) -> dict:
     return out
 
 
-def _write(values: dict) -> None:
-    """Write the config file, preserving anything already there we did not ask about."""
+def _write(values: dict, remove: Iterable[str] = ()) -> None:
+    """Write the config file, preserving anything already there we did not ask about.
+
+    An empty value in `values` means "leave whatever is there alone" -- the wizard skips
+    questions by answering blank, and a skipped question must not wipe a saved key.
+    Actually removing one is therefore a separate argument rather than a special value,
+    so the two intents cannot be confused.
+    """
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -319,6 +326,8 @@ def _write(values: dict) -> None:
                 k, _, v = line.partition("=")
                 existing[k.strip()] = v.strip()
     existing.update({k: v for k, v in values.items() if v})
+    for key in remove:
+        existing.pop(key, None)
     existing.setdefault("PALIMPSEST_APPLY", "0")
     existing.setdefault("PALIMPSEST_AUTONOMY", "none")
 

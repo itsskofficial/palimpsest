@@ -104,17 +104,6 @@ def _call(token: str, method: str, params: dict | None = None,
     return payload.get("result")
 
 
-def _no_workspace(settings: Any) -> str:
-    """Why there is nothing to read, in the terms of the backend actually configured.
-
-    Telling a vault user that `NOTION_TOKEN` is not set is an instruction they cannot
-    follow, and it sends them looking for a Notion problem they do not have.
-    """
-    if getattr(settings, "backend", "notion") == "markdown":
-        return "`PALIMPSEST_VAULT` is not set, so there is no vault to read."
-    return "`NOTION_TOKEN` is not set."
-
-
 def _md(text: str) -> str:
     """Escape the handful of characters Telegram's legacy Markdown chokes on."""
     for ch in ("_", "*", "`", "["):
@@ -378,7 +367,7 @@ class Bot:
 
     def cmd_sync(self, chat_id: int) -> None:
         if not self.settings.has_workspace:
-            return self._say(chat_id, _no_workspace(self.settings))
+            return self._say(chat_id, f"`{self.settings.no_workspace_reason}`")
         self.send(chat_id, "Syncing…")
 
         def work() -> None:

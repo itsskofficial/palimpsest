@@ -730,6 +730,21 @@ class Settings:
         return bool(self.notion_token)
 
     @property
+    def no_workspace_reason(self) -> str:
+        """Why `has_workspace` is false, in terms of the backend actually configured.
+
+        Every site that gates a write asks `has_workspace` and then, until now, blamed
+        `NOTION_TOKEN` -- in the applier, the agent's sync tool, the approval gate, two
+        HTTP routes and the bot. On a vault that is an instruction nobody can follow,
+        and it sends them looking for a Notion problem they do not have. One sentence,
+        one place.
+        """
+        if self.backend == "markdown":
+            return ("PALIMPSEST_VAULT is not set, so there is no vault to read or "
+                    "write")
+        return "NOTION_TOKEN is not set"
+
+    @property
     def transcriber(self) -> str | None:
         """Which speech-to-text provider a recording would go to, if any.
 

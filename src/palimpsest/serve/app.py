@@ -309,7 +309,7 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
         from palimpsest.notion import mirror
 
         if not st.settings.has_workspace:
-            raise HTTPException(400, "NOTION_TOKEN is not set")
+            raise HTTPException(400, st.settings.no_workspace_reason)
         result = mirror.sync(
             st.notion, st.store,
             incremental=bool(payload.get("incremental", True)),
@@ -461,7 +461,7 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
             raise HTTPException(422, "an applied patch must record who approved it: "
                                      "send {'reviewer': '...'}")
         if not st.settings.has_workspace:
-            raise HTTPException(400, "NOTION_TOKEN is not set")
+            raise HTTPException(400, st.settings.no_workspace_reason)
 
         result = apply_patch(st.notion, st.store, found, dry_run=dry_run,
                              reviewer=reviewer or None,

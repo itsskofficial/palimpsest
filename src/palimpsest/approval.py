@@ -103,7 +103,7 @@ def gate(store, patch: Patch, settings: Any, *, notion_factory=None,
         held = auto + held
         outcome["held"] = len(held)
         outcome["reason"] = ("PALIMPSEST_APPLY is off" if not settings.apply
-                             else "NOTION_TOKEN is not set")
+                             else settings.no_workspace_reason)
 
     # -- file the held slice as one approval -----------------------------------
     if held:

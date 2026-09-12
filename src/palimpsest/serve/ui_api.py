@@ -308,18 +308,27 @@ def register(app, st) -> None:
         from palimpsest.config import Settings
         from palimpsest.onboard import _write
 
-        updates = {k: str(v) for k, v in (payload.get("values") or {}).items()
-                   if k in WRITABLE and v is not None and str(v) != ""}
-        if not updates:
+        given = {k: ("" if v is None else str(v))
+                 for k, v in (payload.get("values") or {}).items() if k in WRITABLE}
+        updates = {k: v for k, v in given.items() if v != ""}
+        # An empty value is a deliberate clearing, not a no-op. The Settings screen
+        # sends exactly this when you empty a field, and dropping it meant a credential
+        # could be added from the UI but never removed -- and clearing the only field
+        # you had touched answered "nothing to save", which reads like a broken button.
+        removals = sorted(k for k, v in given.items() if v == "")
+        if not updates and not removals:
             raise HTTPException(422, "nothing to save")
 
-        _write(updates)
+        _write(updates, remove=removals)
         # Make them live now rather than at next restart, so the UI's next call sees
         # the new state. The queue and clients are rebuilt lazily from settings.
         os.environ.update(updates)
+        for key in removals:
+            os.environ.pop(key, None)
         st.settings = Settings.load()
         st._model = st._notion = st._journal = None
-        return {"saved": sorted(updates), "restart_recommended": True}
+        return {"saved": sorted(updates), "cleared": removals,
+                "restart_recommended": True}
 
     # -- approvals ------------------------------------------------------------
 
@@ -449,7 +458,8 @@ def register(app, st) -> None:
         if patch is None:
             raise HTTPException(404, f"no patch {patch_id}")
         if not st.settings.has_workspace:
-            raise HTTPException(400, "NOTION_TOKEN is not set, so nothing can be undone")
+            raise HTTPException(
+                400, f"{st.settings.no_workspace_reason}, so nothing can be undone")
         if not any(op.applied_at for op in patch.operations):
             raise HTTPException(409, "that patch was never applied, so there is nothing "
                                      "to undo")

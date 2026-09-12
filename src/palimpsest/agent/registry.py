@@ -150,7 +150,7 @@ def _sync_mirror(ctx: ToolContext, incremental: bool = True) -> dict:
     from palimpsest.notion import mirror
 
     if not ctx.settings.has_workspace:
-        return {"error": "NOTION_TOKEN is not set"}
+        return {"error": ctx.settings.no_workspace_reason}
     result = mirror.sync(ctx.new_notion(), ctx.store, incremental=bool(incremental),
                          roots=ctx.settings.notion_root_pages)
     ctx.refresh_index()
