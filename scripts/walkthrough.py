@@ -1,6 +1,6 @@
 """The whole product, end to end, with no keys and no network.
 
-    python scripts/demo.py
+    python scripts/walkthrough.py
 
 Builds a small Notion-shaped workspace that has the exact problems this tool exists to
 fix, then runs every stage against it - the sweeps, retrieval, relation classification,
@@ -12,7 +12,14 @@ exercised for real and `undo` genuinely has to restore the previous state. The s
 model returns fixed relations, which is what lets the demo assert on the *planner's*
 behaviour rather than on a model's mood.
 
-Run it with `--real` and the usual keys to do the same thing against your actual Notion.
+Not to be confused with `palimpsest demo`, which is the user-facing thing: a real model,
+a real backend, a sample vault you can type into. This is the CI walkthrough — a scripted
+model and a fake workspace, so it can assert on the *planner's* behaviour rather than on a
+model's mood, and so it runs in four seconds with no key.
+
+The end-to-end test of the *real* write path lives in `tests/unit/test_vault_pipeline.py`,
+which runs the same journey against an actual markdown vault and asserts the file comes
+back byte-identical after undo.
 """
 
 from __future__ import annotations

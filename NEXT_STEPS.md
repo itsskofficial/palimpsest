@@ -58,7 +58,7 @@ run; do it once.
 pip install -e ".[anthropic,serve]"
 
 # 1. See the whole thing work with no keys and no network.
-python scripts/demo.py
+python scripts/walkthrough.py
 
 # 2. Mirror your workspace. Read-only.
 export NOTION_TOKEN=ntn_...
@@ -96,7 +96,7 @@ cannot currently find out, it costs nothing, and it cannot touch anything.
 
 The sequence that shows the idea in about ninety seconds:
 
-1. `python scripts/demo.py` — the whole pipeline, offline, in one screen. Point at the
+1. `python scripts/walkthrough.py` — the whole pipeline, offline, in one screen. Point at the
    `corroborates` line producing a citation and no prose.
 2. `palimpsest sweep duplicates` against **your real Notion**. This is the moment: it is
    your own accumulated mess, listed, and it needed no API key.

@@ -63,8 +63,19 @@ jobs:
       - name: No optional dependency leaked into the default install
         run: |
           ! pip show anthropic openai fastapi psycopg2-binary pypdf 2>/dev/null | grep -q Name
-      - name: The end-to-end demo runs offline
-        run: pip install -e ".[dev]" && python scripts/demo.py
+      - name: The end-to-end walkthrough runs offline
+        run: pip install -e ".[dev]" && python scripts/walkthrough.py
+      - name: Sync, ingest, apply and undo against a real workspace
+        # The write path used to be untestable without a Notion token, which is
+        # why the most dangerous code here had the weakest offline coverage. A
+        # markdown vault closes that: this is the real mirror, the real planner,
+        # the real write door and the real inverse logic, and it asserts the file
+        # on disk comes back byte-identical after undo.
+        run: pytest tests/unit/test_vault_pipeline.py tests/unit/test_workspace.py -v
+      - name: The demo installs and mirrors with nothing configured
+        # The first thirty seconds of a new user, checked on a machine that has
+        # never been set up -- which is the only place that check means anything.
+        run: palimpsest demo --dir /tmp/demo-vault --no-serve
 
   safety:
     # The guard-rails, checked explicitly rather than trusted. Each of these is a
