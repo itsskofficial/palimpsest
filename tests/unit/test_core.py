@@ -471,3 +471,62 @@ def test_a_page_of_wikilinks_is_a_hub():
                        "Sleep and memory")]
     assert links_in(links[0]["raw"]) == ["Gradient clipping"]
     assert guess_role("Knowledge base", links) == "hub"
+
+
+# ---------------------------------------------------------------------------
+# where a sqlite store actually lands
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("url", "expected"), [
+    ("sqlite:///notes.db", "notes.db"),
+    ("sqlite:///data/notes.db", "data/notes.db"),
+    ("sqlite:////var/lib/palimpsest/notes.db", "/var/lib/palimpsest/notes.db"),
+    ("sqlite:///C:/Users/me/notes.db", "C:/Users/me/notes.db"),
+    ("sqlite://:memory:", ":memory:"),
+])
+def test_a_sqlite_url_resolves_to_the_path_it_names(url, expected, tmp_path, monkeypatch):
+    """Three slashes is relative, four is absolute — the usual convention.
+
+    This was `lstrip("/")`, which strips *all* leading slashes, so every absolute path
+    on Linux and macOS silently became relative and the database landed under the
+    working directory rather than where it was asked for. Windows was unaffected because
+    its paths start `C:` — which is exactly why it survived: the bug only appeared on the
+    platforms most people run this on, and the one developer machine it was written on
+    was the one place it worked.
+    """
+    from palimpsest.store.base import open_store
+
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    class Fake:
+        def __init__(self, path):
+            seen["path"] = str(path)
+
+    monkeypatch.setattr("palimpsest.store.sqlite.SQLiteStore", Fake)
+    open_store(url)
+
+    assert seen["path"] == expected
+
+
+def test_an_absolute_sqlite_path_is_not_created_under_the_working_directory(tmp_path,
+                                                                           monkeypatch):
+    """The observable consequence, rather than the string."""
+    from palimpsest.store import open_store
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    # One spelling for both platforms, which is the point of the convention: on POSIX
+    # `as_posix()` starts with a slash so this is the four-slash absolute form, and on
+    # Windows it starts `C:` so it is the three-slash form. Both mean "here, exactly".
+    target = elsewhere / "notes.db"
+    store = open_store(f"sqlite:///{target.as_posix()}")
+    store.close()
+
+    assert target.exists(), "the database must land where the URL says"
+    assert not any(cwd.rglob("*.db")), "and nothing under the working directory"

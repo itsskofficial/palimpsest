@@ -133,7 +133,19 @@ def open_store(url: str = "sqlite:///palimpsest.db") -> Store:
     if url.startswith("sqlite"):
         from palimpsest.store.sqlite import SQLiteStore
 
-        path = url.split("://", 1)[1].lstrip("/") or ":memory:"
+        # Exactly one leading slash is consumed, which is what makes the three- and
+        # four-slash forms mean different things:
+        #
+        #     sqlite:///notes.db        -> notes.db          (relative to the cwd)
+        #     sqlite:////var/notes.db   -> /var/notes.db     (absolute)
+        #
+        # This used to be `.lstrip("/")`, which strips *all* of them — so on Linux and
+        # macOS every absolute path silently became relative and the database landed
+        # under the working directory instead of where it was asked for. Windows was
+        # unaffected, because its paths start `C:` rather than a slash, which is why the
+        # bug survived: it only appeared on the platforms most people run this on.
+        rest = url.split("://", 1)[1]
+        path = (rest[1:] if rest.startswith("/") else rest) or ":memory:"
         return SQLiteStore(path)
     if url.startswith(("postgres://", "postgresql://")):
         from palimpsest.store.postgres import PostgresStore

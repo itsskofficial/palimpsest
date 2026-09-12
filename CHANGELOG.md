@@ -87,6 +87,11 @@ your real notes.
   project on PyPI. The demo now checks first and says what to install, and the README
   asks for `palimpsest-notion[serve]`.
 
+- **Every absolute SQLite path was relative on Linux and macOS.** `open_store` stripped
+  *all* leading slashes, so `sqlite:////var/lib/notes.db` opened `var/lib/notes.db` under
+  the working directory. Windows was unaffected — its paths start `C:` — which is exactly
+  why it survived: the bug only appeared on the platforms most people run this on.
+
 ### Security
 
 - **`palimpsest demo` no longer inherits credentials from the config file of whoever runs
