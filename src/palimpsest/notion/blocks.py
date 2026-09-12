@@ -230,19 +230,19 @@ def footnote_block(text: str, source_title: str, locator: str | None = None,
     # `[first line\nsecond line](url)` into a markdown vault — a link whose text is the
     # model's explanation, spanning a newline inside a callout. Fragile to render, and
     # wrong to read: the rationale is ours, and only the citation points anywhere.
-    block = {
-        "object": "block", "type": "callout",
-        "callout": {"rich_text": rich_text(head, link=url),
-                    "icon": {"type": "emoji", "emoji": "📎"},
-                    "color": "gray_background"},
+    body: dict[str, Any] = {
+        "rich_text": rich_text(head, link=url),
+        "icon": {"type": "emoji", "emoji": "📎"},
+        "color": "gray_background",
     }
+    block = {"object": "block", "type": "callout", "callout": body}
     if why:
         # A child, not a newline inside the callout's own text. A vault renders a
         # callout's children as further `> ` lines and reads them back into the same
         # callout; a newline in the rich text becomes a bare line that parses back as a
         # *separate paragraph* — so one operation wrote one block, the mirror found two,
         # and undoing the footnote left the reasoning orphaned on the page.
-        block["callout"]["children"] = [paragraph(why)]
+        body["children"] = [paragraph(why)]
     return block
 
 
