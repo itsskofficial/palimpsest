@@ -201,7 +201,11 @@ def test_a_recording_anchors_each_cue_to_its_own_moment(tmp_path, monkeypatch):
         {"start": 4354.0, "text": "That concludes positional encoding."},
     ])
 
-    source = audio_mod.from_audio(str(recording), title="Lecture 4")
+    # `provider="groq"` explicitly. `transcribe` otherwise picks by whichever key it
+    # finds in the environment, so this test stubbed `_groq`, set GROQ_API_KEY, and then
+    # -- on a machine that also had a Deepgram key -- transcribed through Deepgram for
+    # real, posting its one-byte fixture to a paid API.
+    source = audio_mod.from_audio(str(recording), title="Lecture 4", provider="groq")
     assert source.kind == "audio"
     assert source.meta["transcriber"] == "groq"
     assert source.meta["timestamped"] is True

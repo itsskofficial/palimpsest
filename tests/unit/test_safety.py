@@ -532,3 +532,50 @@ def test_the_safety_document_covers_every_autonomy_level():
         encoding="utf-8")
     for level in AUTONOMY_LEVELS:
         assert f"`{level}`" in document, f"docs/SAFETY.md does not mention {level!r}"
+
+
+# ---------------------------------------------------------------------------
+# no test may spend money
+# ---------------------------------------------------------------------------
+
+
+def test_the_hermetic_fixture_strips_every_credential_the_code_reads():
+    """A unit test must not be able to reach a paid API, whatever the developer exports.
+
+    This is not hypothetical. `audio.transcribe` picks a provider by reading `os.environ`
+    directly rather than by asking `Settings`, so stubbing the config loader never reached
+    it — and on a machine with `DEEPGRAM_API_KEY` set, a unit test posted its one-byte
+    audio fixture to Deepgram and failed with "corrupt or unsupported data". Money, a live
+    dependency and a credential in a request, from `pytest`.
+
+    Rather than fixing that one name, this walks the source for every credential the code
+    reads out of the environment and fails if the fixture does not strip it. A new
+    provider added next year is covered without anybody remembering to be careful.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
+    stripped = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', conftest))
+
+    #: Names that are configuration rather than a credential: they cannot spend money or
+    #: reach anything, so a test that sets one is not doing anything dangerous.
+    harmless = {"PALIMPSEST_DATABASE_URL", "PALIMPSEST_ARTIFACT_URL", "PALIMPSEST_BACKEND",
+                "PALIMPSEST_VAULT", "PALIMPSEST_CONFIG", "PALIMPSEST_ENV",
+                "PALIMPSEST_HOST", "PALIMPSEST_PORT", "APPDATA", "XDG_CONFIG_HOME",
+                "PALIMPSEST_TRACE", "PALIMPSEST_DEMO_HOME"}
+
+    reads = set()
+    for path in (root / "src" / "palimpsest").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        for name in re.findall(r'os\.environ(?:\.get)?[(\[]\s*"([A-Z][A-Z0-9_]+)"',
+                               source):
+            if name.endswith(("_API_KEY", "_TOKEN", "_KEY", "_SECRET")):
+                reads.add(name)
+
+    missing = sorted(reads - stripped - harmless)
+    assert not missing, (
+        f"tests/conftest.py does not clear {missing}.\n"
+        "Any test on a machine with one of those set could make a live, billable call. "
+        "Add them to the `delenv` list in `_hermetic_config`.")

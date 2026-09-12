@@ -44,7 +44,19 @@ def _hermetic_config(monkeypatch, request):
                  "OPENROUTER_API_KEY", "TOGETHER_API_KEY", "DEEPSEEK_API_KEY",
                  "MISTRAL_API_KEY", "XAI_API_KEY", "PALIMPSEST_MODEL",
                  "PALIMPSEST_MODEL_PROVIDER", "PALIMPSEST_MODEL_BASE_URL",
-                 "PALIMPSEST_MODEL_API_KEY"):
+                 "PALIMPSEST_MODEL_API_KEY",
+                 # Transcription and scraping keys too, and these matter more than the
+                 # model ones. `audio.transcribe` picks a provider by reading os.environ
+                 # directly rather than by asking `Settings`, so stubbing the config
+                 # loader does not reach it: a developer with DEEPGRAM_API_KEY exported
+                 # had a *unit test* posting a one-byte file to a paid API and failing
+                 # with "corrupt or unsupported data". Money, a live dependency, and a
+                 # key in a request, from `pytest`.
+                 "DEEPGRAM_API_KEY", "SARVAM_API_KEY", "PALIMPSEST_TRANSCRIBE",
+                 "FIRECRAWL_API_KEY", "NOTION_TOKEN", "TELEGRAM_BOT_TOKEN",
+                 "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
+                 "PALIMPSEST_EMBED_API_KEY", "PALIMPSEST_API_KEY",
+                 "SUPABASE_SERVICE_ROLE_KEY"):
         monkeypatch.delenv(name, raising=False)
 
 ATTENTION = ("Scaled dot-product attention divides the logits by the square root of the "

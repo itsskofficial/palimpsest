@@ -78,8 +78,6 @@ PALIMPSEST_BACKEND=markdown PALIMPSEST_VAULT=~/vault palimpsest serve
 
 Same pipeline, same guarantees. See [Where your notes live](#where-your-notes-live).
 
-Prefer the command line? Everything the bot does is also a command:
-
 ```bash
 palimpsest setup                      # re-run the wizard any time
 palimpsest eval retrieval             # can it find the right page? no key needed
