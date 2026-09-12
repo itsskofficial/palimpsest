@@ -648,3 +648,280 @@ def test_a_vault_page_url_is_a_page_url_too():
     text = "[Sleep](file:///notes/sleep.md)"
 
     assert ground_links(mirror, text) == text
+
+
+# ---------------------------------------------------------------------------
+# the tools that change things
+#
+# Everything above this line reads. These four write, or ask the gate to, and the
+# failure they share is not an exception: it is a tool that returns something the model
+# will summarise as "done" when nothing happened. A held edit reported as applied is the
+# one lie the product cannot afford, because the whole safety model rests on the user
+# believing the difference.
+# ---------------------------------------------------------------------------
+
+
+def test_applying_a_patch_that_is_not_there_is_an_error_the_model_can_recover_from(ctx):
+    assert "error" in _call(ctx, "apply_patch", patch_id="pch_nope")
+
+
+def test_only_the_named_operations_are_put_through_the_gate(ctx):
+    """The model is allowed to approve part of a patch — "apply the citations, leave the
+    rewrite". Ignoring the list would apply the rest behind the user's back."""
+    keep, drop = _cite(), _supersede()
+    patch = _patch(keep, drop)
+    ctx.store.put_patch(patch)
+
+    _call(ctx, "apply_patch", patch_id=patch.patch_id, operation_ids=[keep.op_id])
+
+    approval = ctx.store.list_approvals(status="pending", limit=5)[0]
+    assert approval["operation_ids"] == [keep.op_id]
+
+
+def test_a_held_edit_is_labelled_as_not_applied_in_words(ctx):
+    """The model reads this dict and writes a sentence from it. Without a note saying so
+    outright, "held: 1" is summarised as "I've made that change" — which is the one
+    thing the gate exists to prevent somebody believing."""
+    patch = _patch(_cite())
+    ctx.store.put_patch(patch)
+
+    out = _call(ctx, "apply_patch", patch_id=patch.patch_id)
+
+    assert out["approval_id"]
+    assert "NOT applied" in out["note"]
+    assert "waiting for their tap" in out["note"]
+
+
+def test_an_applied_patch_carries_no_such_warning(ctx, monkeypatch):
+    """The opposite error: hedging on something that did land teaches people to ignore
+    the hedge on something that did not."""
+    monkeypatch.setattr(ctx.settings, "apply", True, raising=False)
+    monkeypatch.setattr(ctx.settings, "autonomy", "low", raising=False)
+    monkeypatch.setattr(ctx.settings, "notion_token", "ntn_x", raising=False)
+    monkeypatch.setattr(ctx, "new_notion", lambda: FakeNotion(), raising=False)
+    monkeypatch.setattr(ctx, "new_journal", lambda: None, raising=False)
+    patch = _patch(_cite())
+    ctx.store.put_patch(patch)
+
+    out = _call(ctx, "apply_patch", patch_id=patch.patch_id)
+
+    assert out.get("applied")
+    assert "NOT applied" not in (out.get("note") or "")
+
+
+def test_undoing_something_that_is_not_there_is_an_error(ctx):
+    assert "error" in _call(ctx, "undo_patch", patch_id="pch_nope")
+
+
+def test_undo_with_writes_off_says_that_rather_than_pretending(ctx):
+    patch = _patch(_cite())
+    ctx.store.put_patch(patch)
+
+    out = _call(ctx, "undo_patch", patch_id=patch.patch_id)
+
+    assert "PALIMPSEST_APPLY" in out["error"]
+
+
+def test_undo_on_a_vault_with_nowhere_to_write_names_the_right_setting(ctx,
+                                                                      monkeypatch):
+    """Telling a vault user that `NOTION_TOKEN` is unset is an instruction they cannot
+    follow, and sends them hunting for a Notion problem they do not have."""
+    monkeypatch.setattr(ctx.settings, "apply", True, raising=False)
+    monkeypatch.setattr(ctx.settings, "backend", "markdown", raising=False)
+    monkeypatch.setattr(ctx.settings, "vault_path", None, raising=False)
+    patch = _patch(_cite())
+    ctx.store.put_patch(patch)
+
+    out = _call(ctx, "undo_patch", patch_id=patch.patch_id)
+
+    assert "PALIMPSEST_VAULT" in out["error"]
+    assert "NOTION_TOKEN" not in out["error"]
+
+
+def test_rejecting_a_patch_also_closes_the_approval_pointing_at_it(ctx):
+    """Otherwise the card stays on screen for a decision that has been made, and tapping
+    it applies something the agent already rejected."""
+    patch = _patch(_cite())
+    ctx.store.put_patch(patch)
+    _call(ctx, "apply_patch", patch_id=patch.patch_id)
+    assert ctx.store.list_approvals(status="pending", limit=5)
+
+    out = _call(ctx, "reject_patch", patch_id=patch.patch_id, reason="not right")
+
+    assert out["status"] == "rejected"
+    assert ctx.store.list_approvals(status="pending", limit=5) == []
+
+
+# ---------------------------------------------------------------------------
+# rewriting a whole page — the largest thing the agent can propose
+# ---------------------------------------------------------------------------
+
+
+class Composer:
+    """A model that lays a page out from a script."""
+
+    model = "fake/compose-1"
+    name = "fake"
+    base_url = None
+
+    def __init__(self, blocks=None, cover_all=True):
+        self.blocks = blocks
+        self.cover_all = cover_all
+        self.prompts: list[str] = []
+        from palimpsest.llm import Usage
+
+        self.usage = Usage()
+
+    def json(self, *, task, system, prompt, schema, effort="high", cache_prefix=None,
+             max_tokens=None):
+        self.prompts.append(prompt)
+        if self.blocks is not None:
+            return {"title": "Attention", "blocks": self.blocks}
+        import re
+
+        ids = re.findall(r"clm_[0-9a-f]+", prompt)
+        used = ids if self.cover_all else ids[:1]
+        return {"title": "Attention", "icon": "🧠", "blocks": [
+            {"type": "paragraph", "text": "Rewritten.", "claim_ids": used}]}
+
+
+def _rewritable(ctx, monkeypatch, model):
+    monkeypatch.setattr(ctx.settings, "anthropic_api_key", "sk-ant-x", raising=False)
+    monkeypatch.setattr(ctx, "_model", model, raising=False)
+    monkeypatch.setattr(type(ctx), "model", property(lambda self: model), raising=False)
+
+
+def test_rewriting_a_page_that_is_not_mirrored_says_to_sync(ctx):
+    out = _call(ctx, "rewrite_page", page_id="pg_nope")
+
+    assert "error" in out
+    assert "sync" in out["error"]
+
+
+def test_rewriting_without_a_model_is_refused(ctx):
+    out = _call(ctx, "rewrite_page", page_id="pg_a")
+
+    assert "needs a model" in out["error"]
+
+
+def test_rewriting_an_empty_page_is_refused(ctx, monkeypatch):
+    ctx.store.put_pages([{"page_id": "pg_empty", "title": "Empty", "url": None}])
+    _rewritable(ctx, monkeypatch, Composer())
+
+    out = _call(ctx, "rewrite_page", page_id="pg_empty")
+
+    assert "no text to rewrite" in out["error"]
+
+
+def test_a_rewrite_that_dropped_a_line_is_discarded_rather_than_offered(ctx,
+                                                                       monkeypatch):
+    """The failure the composer's coverage check exists for. A page that is *mostly*
+    right is worse than one that failed, because nobody re-reads a page that looks
+    finished — and the missing sentence is found months later, if ever."""
+    ctx.store.put_blocks([{"block_id": "bk2", "page_id": "pg_a", "type": "paragraph",
+                           "position": 1, "text": "Softmax is applied row-wise."}])
+    _rewritable(ctx, monkeypatch, Composer(cover_all=False))
+
+    out = _call(ctx, "rewrite_page", page_id="pg_a")
+
+    assert "dropped" in out["error"]
+    assert "Nothing was changed" in out["error"]
+    assert ctx.store.list_patches(limit=5) == [], "and no patch was left lying around"
+
+
+def test_a_good_rewrite_goes_through_the_same_gate_as_the_smallest_edit(ctx,
+                                                                       monkeypatch):
+    """It is the largest thing the agent can do and it gets no special path. What makes
+    it safe is not that it is small — it is not — but that the operation snapshots every
+    block it replaces, so undo restores the page in order."""
+    _rewritable(ctx, monkeypatch, Composer())
+
+    out = _call(ctx, "rewrite_page", page_id="pg_a")
+
+    assert out["patch_id"]
+    assert out["page"] == "Attention"
+    assert out["blocks_before"] == 1
+    assert out["blocks_after"] == 1
+    assert "waiting for the user to approve" in out["note"]
+    assert ctx.store.list_approvals(status="pending", limit=5), "held, like everything"
+
+
+def test_the_composer_is_shown_the_page_as_it_stands(ctx, monkeypatch):
+    """Composing from the instruction alone produces a page about the right topic that
+    has quietly lost half its content, and every intermediate step looks correct."""
+    model = Composer()
+    _rewritable(ctx, monkeypatch, model)
+
+    _call(ctx, "rewrite_page", page_id="pg_a", instruction="tighten it up")
+
+    assert "Attention scales by 1/sqrt(d_k)." in model.prompts[0]
+
+
+def test_a_composer_that_throws_is_an_error_rather_than_a_crashed_turn(ctx,
+                                                                      monkeypatch):
+    class Broken(Composer):
+        def json(self, **kw):
+            raise RuntimeError("the provider hung up")
+
+    _rewritable(ctx, monkeypatch, Broken())
+
+    out = _call(ctx, "rewrite_page", page_id="pg_a")
+
+    assert "could not compose" in out["error"]
+    assert "hung up" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# the read-only tools, on the paths nobody exercises
+# ---------------------------------------------------------------------------
+
+
+def test_syncing_with_no_workspace_configured_names_the_right_setting(ctx):
+    out = _call(ctx, "sync_mirror")
+
+    assert "NOTION_TOKEN" in out["error"]
+
+
+def test_a_sweep_kind_nobody_implemented_lists_the_ones_that_exist(ctx):
+    out = _call(ctx, "run_sweep", kind="vibes")
+
+    assert "error" in out
+    for kind in ("duplicates", "stale"):
+        assert kind in out["error"]
+
+
+def test_the_sweeps_that_need_no_model_run_from_the_agent(ctx):
+    for kind, reported in (("duplicates", "duplicates"), ("stale", "stale"),
+                           ("questions", "open_questions")):
+        out = _call(ctx, "run_sweep", kind=kind)
+        assert "error" not in out, kind
+        assert out["kind"] == reported
+
+
+def test_the_contradiction_sweep_says_it_needs_a_model_rather_than_failing_oddly(ctx):
+    out = _call(ctx, "run_sweep", kind="contradictions")
+
+    assert "error" in out
+
+
+def test_proposing_a_structure_without_a_model_is_refused(ctx):
+    out = _call(ctx, "propose_organisation")
+
+    assert "error" in out
+
+
+def test_read_page_returns_the_blocks_and_the_history(ctx):
+    out = _call(ctx, "read_page", page_id="pg_a")
+
+    assert out["title"] == "Attention"
+    assert out["url"] == "https://notion.so/a"
+    assert [b["block_id"] for b in out["blocks"]] == ["bk1"]
+    assert out["history"] == []
+
+
+def test_search_results_carry_a_url_so_the_answer_can_link_rather_than_cite_an_id(ctx):
+    hits = _call(ctx, "search_notes", query="attention")["results"]
+
+    assert hits
+    assert hits[0]["url"] == "https://notion.so/a"
+    assert hits[0]["title"] == "Attention"

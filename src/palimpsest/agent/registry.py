@@ -224,8 +224,9 @@ def _undo_patch(ctx: ToolContext, patch_id: str) -> dict:
     if patch is None:
         return {"error": f"no patch {patch_id}"}
     if not (ctx.settings.apply and ctx.settings.has_workspace):
-        return {"error": "writes are off (PALIMPSEST_APPLY=0) or NOTION_TOKEN is unset; "
-                         "nothing to undo was applied"}
+        why = ("writes are off (PALIMPSEST_APPLY=0)" if not ctx.settings.apply
+               else ctx.settings.no_workspace_reason)
+        return {"error": f"{why}; nothing to undo was applied"}
     result = revert_patch(ctx.new_notion(), ctx.store, patch, reviewer="agent",
                           journal=ctx.new_journal())
     ctx.refresh_index()
