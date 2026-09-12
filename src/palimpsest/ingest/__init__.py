@@ -178,7 +178,7 @@ def resolve(spec: str, *, kind: str | None = None, model=None,
     if kind == "text":
         from palimpsest.ingest.files import from_text
 
-        return from_text(spec, title=title)
+        return from_text(spec, title=title, url=url)
     if kind == "web":
         from palimpsest.ingest.web import from_url
 

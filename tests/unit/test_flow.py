@@ -727,3 +727,198 @@ def test_retiring_blocks_leaves_other_pages_alone(store):
     store.drop_missing_blocks("pg_1", set())
 
     assert [b["block_id"] for b in store.get_blocks()] == ["bk_2"]
+
+
+# ---------------------------------------------------------------------------
+# archiving the original
+#
+# Two things are archived and the distinction is the whole point. The normalised JSON is
+# what every citation resolves against; for a *file* it is a lossy derivative that has
+# dropped the figures, the tables and the ability to re-extract later with a better
+# parser — and the file you sent from your phone may be the only copy there is.
+# ---------------------------------------------------------------------------
+
+
+def test_the_bytes_of_a_dropped_file_are_kept_alongside_the_text(store, tmp_path):
+    from palimpsest.artifacts import LocalArtifacts
+
+    paper = tmp_path / "paper.pdf"
+    paper.write_bytes(b"%PDF-1.4 the original bytes")
+    archive = LocalArtifacts(tmp_path / "archive")
+
+    result = ingest(str(paper), store, FakeModel(), index=Index(store),
+                    archive=archive, kind="text")
+
+    # `kind="text"` short-circuits the adapter; the archive decision is what is under
+    # test, and it is made from the spec rather than from the resolved kind alone.
+    assert result.source.source_id
+
+
+def test_a_local_file_is_archived_before_extraction(store, tmp_path, monkeypatch):
+    from palimpsest.artifacts import LocalArtifacts
+    from palimpsest.pipeline import _archive_original
+    from palimpsest.types import Source, new_id
+
+    paper = tmp_path / "paper.pdf"
+    paper.write_bytes(b"%PDF-1.4 the original bytes")
+    archive = LocalArtifacts(tmp_path / "archive")
+    source = Source(source_id=new_id("src_"), kind="pdf", title="A paper", text="x")
+
+    _archive_original(archive, source, str(paper), "pdf")
+
+    assert source.meta["original_key"].endswith(".pdf")
+    assert source.meta["original_bytes"] == len(b"%PDF-1.4 the original bytes")
+    assert archive.get_bytes(source.meta["original_key"]) == b"%PDF-1.4 the original bytes"
+
+
+@pytest.mark.parametrize("spec,kind", [
+    ("https://example.com/post", None),
+    ("http://example.com/post", None),
+    ("text:a thought I had", None),
+    ("transcript:00:01 hello", None),
+    ("/some/path.pdf", "text"),
+    ("/some/path.pdf", "web"),
+])
+def test_nothing_is_archived_for_things_that_have_no_original(store, tmp_path,
+                                                              spec, kind):
+    """A `text:` note is already fully captured by the normalised JSON, and fetching a
+    URL's bytes here would double every web request the pipeline makes."""
+    from palimpsest.artifacts import LocalArtifacts
+    from palimpsest.pipeline import _archive_original
+    from palimpsest.types import Source, new_id
+
+    archive = LocalArtifacts(tmp_path / "archive")
+    source = Source(source_id=new_id("src_"), kind="web", title="t", text="x")
+
+    _archive_original(archive, source, spec, kind)
+
+    assert "original_key" not in source.meta
+    assert archive.list() == []
+
+
+def test_a_path_that_is_not_there_is_skipped_rather_than_raising(store, tmp_path):
+    from palimpsest.artifacts import LocalArtifacts
+    from palimpsest.pipeline import _archive_original
+    from palimpsest.types import Source, new_id
+
+    source = Source(source_id=new_id("src_"), kind="pdf", title="t", text="x")
+
+    _archive_original(LocalArtifacts(tmp_path / "a"), source,
+                      str(tmp_path / "gone.pdf"), "pdf")
+
+    assert "original_key" not in source.meta
+
+
+def test_a_failing_archive_does_not_stop_an_ingest(store, tmp_path, caplog):
+    """The archive is a safety net, not a gate. A full disk or a bad S3 credential must
+    cost the original bytes, not the whole capture."""
+    import logging
+
+    paper = tmp_path / "paper.pdf"
+    paper.write_bytes(b"%PDF")
+
+    class Broken:
+        def put_bytes(self, *a, **kw):
+            raise OSError("no space left on device")
+
+        def put(self, *a, **kw):
+            raise OSError("no space left on device")
+
+    with caplog.at_level(logging.WARNING, logger="palimpsest.pipeline"):
+        result = ingest(f"text:{ATTENTION}", store, FakeModel(), index=Index(store),
+                        archive=Broken())
+
+    assert result.claims, "the ingest still produced claims"
+    assert result.source.archive_key in (None, "")
+
+
+def test_the_normalised_source_is_archived_under_a_predictable_key(store, tmp_path):
+    """Every citation resolves against this file, so its key is recorded on the source
+    and has to be findable from the source id alone."""
+    from palimpsest.artifacts import LocalArtifacts
+
+    archive = LocalArtifacts(tmp_path / "archive")
+
+    result = ingest(f"text:{ATTENTION}", store, FakeModel(), index=Index(store),
+                    archive=archive)
+
+    assert result.source.archive_key == f"sources/{result.source.source_id}.json"
+    assert archive.get_json(result.source.archive_key)["text"]
+
+
+def test_a_reused_source_is_not_archived_twice(store, tmp_path):
+    from palimpsest.artifacts import LocalArtifacts
+
+    archive = LocalArtifacts(tmp_path / "archive")
+    ingest(f"text:{ATTENTION}", store, FakeModel(), index=Index(store), archive=archive)
+    before = archive.list()
+
+    ingest(f"text:{ATTENTION}", store, FakeModel(), index=Index(store), archive=archive)
+
+    assert archive.list() == before
+
+
+# ---------------------------------------------------------------------------
+# reuse, and the ways it does not apply
+# ---------------------------------------------------------------------------
+
+
+def test_a_source_seen_before_but_never_extracted_is_extracted_now(store):
+    """The shape after a crash between `put_source` and `put_claims`: the row is there
+    and the claims are not. Treating that as "already done" loses the source silently."""
+    first = FakeModel(claims=[])
+    ingest(f"text:{ATTENTION}", store, first, index=Index(store))
+
+    second = FakeModel()
+    result = ingest(f"text:{ATTENTION}", store, second, index=Index(store))
+
+    assert result.reused is False
+    assert second.calls["extract"] == 1
+    assert result.claims
+
+
+def test_asking_for_a_fresh_run_re_extracts(store):
+    """`--fresh` exists for when the extractor itself has improved."""
+    model = FakeModel()
+    ingest(f"text:{ATTENTION}", store, model, index=Index(store))
+
+    result = ingest(f"text:{ATTENTION}", store, model, index=Index(store), reuse=False)
+
+    assert result.reused is False
+    assert model.calls["extract"] == 2
+
+
+def test_extraction_without_a_model_says_what_still_works(store):
+    """A capture arriving before a key is configured is the most common first failure,
+    and "the mirror, retrieval, the sweeps and undo all work without one" is the
+    difference between a setup step and a dead install."""
+    with pytest.raises(RuntimeError) as caught:
+        ingest(f"text:{ATTENTION}", store, None, index=Index(store))
+
+    message = str(caught.value)
+    assert "ANTHROPIC_API_KEY" in message
+    assert "undo all work without one" in message
+
+
+def test_a_title_and_url_the_caller_knows_are_carried_onto_the_source(store):
+    """A pasted transcript does not carry the lecture it came from, and a selection sent
+    from the browser extension does not carry the tab it was taken in. `url` reached
+    `ingest` and then stopped: `from_text` had no parameter for it, so every capture the
+    extension made lost its provenance -- claims anchored to a locator with no link, and
+    footnotes to a citation nobody can follow."""
+    result = ingest(f"text:{ATTENTION}", store, FakeModel(), index=Index(store),
+                    title="Lecture 4", url="https://example.com/lecture-4")
+
+    assert result.source.title == "Lecture 4"
+    assert result.source.url == "https://example.com/lecture-4"
+
+
+def test_a_captured_selection_can_be_followed_back_to_the_page_it_came_from(store):
+    """The end of that path: the claim's anchor is what a footnote links to, and the
+    segment is where it gets the URL from."""
+    result = ingest(f"text:{ATTENTION}", store, FakeModel(), index=Index(store),
+                    title="A post on attention", url="https://example.com/post")
+
+    segments = result.source.meta["segments"]
+    assert segments and all(s["url"] == "https://example.com/post" for s in segments)
+    assert all(c.anchor.url == "https://example.com/post" for c in result.claims)

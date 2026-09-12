@@ -353,10 +353,16 @@ def test_the_footnote_on_the_page_carries_the_why(store):
     block = footnote_block("old wording", "A lecture", "14:22",
                            "https://youtu.be/x?t=862",
                            why="a later source states the figure more precisely")
-    rendered = "".join(r["text"]["content"]
-                       for r in block["callout"]["rich_text"])
-    assert "14:22" in rendered
-    assert "more precisely" in rendered
+
+    cited = "".join(r["text"]["content"] for r in block["callout"]["rich_text"])
+    assert "14:22" in cited
+    assert cited.endswith("14:22"), "the locator is the end of the citation"
+
+    # The reasoning is a child rather than a second line of the citation itself: a
+    # vault reads a bare continuation line back as a separate paragraph, and the
+    # footnote's own undo then leaves it orphaned on the page.
+    why = block["callout"]["children"]
+    assert "more precisely" in why[0]["paragraph"]["rich_text"][0]["text"]["content"]
 
 
 def test_the_patch_apply_path_accepts_a_journal(store):

@@ -555,3 +555,34 @@ def test_an_absolute_sqlite_path_is_not_created_under_the_working_directory(tmp_
 
     assert target.exists(), "the database must land where the URL says"
     assert not any(cwd.rglob("*.db")), "and nothing under the working directory"
+
+
+def test_a_citation_link_covers_the_citation_and_not_the_reasoning():
+    """In a markdown vault a linked callout becomes `[text](url)`. Wrapping the whole
+    body put the model's explanation inside the link text, spanning a newline inside a
+    callout -- fragile to render, and wrong to read: the rationale is ours, and only the
+    citation points anywhere."""
+    from palimpsest.notion.blocks import footnote_block
+    from palimpsest.workspace.convert import to_markdown
+
+    block = footnote_block("refined from: “the old wording”", "A post",
+                           "Introduction", "https://example.com/p",
+                           why="The source states it more precisely.")
+
+    rendered = to_markdown([block])
+    line = rendered.splitlines()[0]
+
+    assert line.endswith("](https://example.com/p)")
+    assert "The source states it more precisely." not in line
+    assert "The source states it more precisely." in rendered
+
+
+def test_a_footnote_with_no_url_is_not_a_link_at_all():
+    """An empty href renders as `[text]()`, which looks clickable and is not."""
+    from palimpsest.notion.blocks import footnote_block
+    from palimpsest.workspace.convert import to_markdown
+
+    rendered = to_markdown([footnote_block("noted", "A note", None, None,
+                                           why="Because.")])
+
+    assert "](" not in rendered

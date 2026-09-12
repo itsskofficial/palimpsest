@@ -225,8 +225,25 @@ def footnote_block(text: str, source_title: str, locator: str | None = None,
         bits.append(locator)
     tail = " · ".join(b for b in bits if b)
     head = f"{text} — {tail}" if text else tail
-    body = f"{head}\n{why}" if why else head
-    return callout(body, icon="📎", color="gray_background", link=url)
+
+    # The link goes on the citation, not on the reasoning. Wrapping the whole body put
+    # `[first line\nsecond line](url)` into a markdown vault — a link whose text is the
+    # model's explanation, spanning a newline inside a callout. Fragile to render, and
+    # wrong to read: the rationale is ours, and only the citation points anywhere.
+    block = {
+        "object": "block", "type": "callout",
+        "callout": {"rich_text": rich_text(head, link=url),
+                    "icon": {"type": "emoji", "emoji": "📎"},
+                    "color": "gray_background"},
+    }
+    if why:
+        # A child, not a newline inside the callout's own text. A vault renders a
+        # callout's children as further `> ` lines and reads them back into the same
+        # callout; a newline in the rich text becomes a bare line that parses back as a
+        # *separate paragraph* — so one operation wrote one block, the mirror found two,
+        # and undoing the footnote left the reasoning orphaned on the page.
+        block["callout"]["children"] = [paragraph(why)]
+    return block
 
 
 def text_payload(block_type: str, text: str, **kw) -> dict:

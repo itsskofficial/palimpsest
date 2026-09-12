@@ -37,25 +37,34 @@ log = logging.getLogger("palimpsest.ingest.files")
 MAX_ROWS = 400
 
 
-def from_text(spec: str, title: str | None = None) -> Source:
-    """A literal string (`text:...`), or a local text/markdown file."""
+def from_text(spec: str, title: str | None = None, url: str | None = None) -> Source:
+    """A literal string (`text:...`), or a local text/markdown file.
+
+    `url` is where the text came from, which the text itself cannot say. Selecting a
+    paragraph on a page and sending it arrives here as `text:` plus the tab's URL, and
+    dropping that was losing the provenance of every capture the browser extension makes
+    — the claim anchored to a locator with no link, and the footnote to a citation you
+    cannot follow.
+    """
     from palimpsest.ingest.web import segments_from_markdown
 
     if spec.startswith("text:"):
         body = spec[5:].strip()
-        return make_source("text", title or "Note", body,
-                           segments=segments_from_markdown(body), extractor="inline")
+        return make_source("text", title or "Note", body, url=url,
+                           segments=segments_from_markdown(body, url),
+                           extractor="inline")
 
     path = Path(spec)
     if not path.exists():
         # A bare string with no matching file is a note, not a typo — capturing a
         # thought by typing it is the lowest-friction path into the system.
-        return make_source("text", title or "Note", spec,
-                           segments=segments_from_markdown(spec), extractor="inline")
+        return make_source("text", title or "Note", spec, url=url,
+                           segments=segments_from_markdown(spec, url),
+                           extractor="inline")
 
     body = path.read_text(encoding="utf-8", errors="replace")
-    return make_source("text", title or path.stem, body,
-                       segments=segments_from_markdown(body),
+    return make_source("text", title or path.stem, body, url=url,
+                       segments=segments_from_markdown(body, url),
                        extractor="file", path=str(path.resolve()))
 
 
