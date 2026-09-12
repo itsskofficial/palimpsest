@@ -75,6 +75,11 @@ class JobQueue:
         if self._started:
             return self
         self._started = True
+        # `stop()` set this and nothing cleared it, so a queue started a second time in
+        # one process got workers that read the flag and exited immediately -- captures
+        # accepted, none ever run. The desktop app does exactly that: it stops the queue
+        # when the window closes and starts it again when the window reopens.
+        self._stop.clear()
         for i in range(max(1, self.workers)):
             t = threading.Thread(target=self._loop, name=f"palimpsest-worker-{i}",
                                  daemon=True)
@@ -120,12 +125,29 @@ class JobQueue:
     # -- the worker loop -------------------------------------------------------
 
     def _loop(self) -> None:
-        store = self.store_factory()
+        """One worker. Nothing in here may end the thread except `stop()`.
+
+        A worker that dies is the queue's worst failure: capacity drops silently,
+        nothing restarts it, nothing polls for "are there still workers", and with two
+        of them a second occurrence leaves captures sitting at `queued` with no error
+        anywhere. So both halves are guarded -- building the store, which can fail while
+        another process holds the database, and running the job, whose last act is a
+        write that can fail for the same reason.
+        """
+        store = None
         try:
             while not self._stop.is_set():
+                if store is None:
+                    try:
+                        store = self.store_factory()
+                    except Exception:
+                        log.exception("could not open a store; retrying")
+                        self._stop.wait(2.0)
+                        continue
+
                 try:
                     job = store.claim_job()
-                except Exception:  # pragma: no cover - transient store error
+                except Exception:
                     log.exception("could not claim a job; backing off")
                     self._stop.wait(2.0)
                     continue
@@ -137,7 +159,15 @@ class JobQueue:
                     self._wake.clear()
                     continue
 
-                self._run(store, job)
+                try:
+                    self._run(store, job)
+                except Exception:
+                    # `_run` already handles a handler that raises. Reaching here means
+                    # the *store* failed while recording the outcome, which leaves the
+                    # row at `running` -- a spinner that never resolves, rescued by
+                    # `requeue_stale_jobs()` on the next start. Losing the worker as
+                    # well would turn one stuck job into a stuck queue.
+                    log.exception("job %s left unfinished", job.get("job_id"))
         finally:
             _close(store)
 
@@ -165,6 +195,8 @@ class JobQueue:
 
 
 def _close(store) -> None:
+    if store is None:
+        return
     with contextlib.suppress(Exception):  # pragma: no cover - defensive
         store.close()
 

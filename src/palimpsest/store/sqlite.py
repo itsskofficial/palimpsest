@@ -18,6 +18,7 @@ Design notes worth knowing:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -47,6 +48,24 @@ def _uj(raw: Any, default: Any) -> Any:
         return default
 
 
+def _statements(script: str):
+    """Split a migration script the way SQLite itself would.
+
+    Splitting on ";" is the obvious version and it is wrong on both of the things these
+    scripts contain -- semicolons inside string literals, and the bodies of `CREATE
+    TRIGGER ... BEGIN ... END`. `complete_statement` is the stdlib's own answer to
+    "where does this statement end", and it knows about both.
+    """
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if buffer.strip() and sqlite3.complete_statement(buffer):
+            yield buffer
+            buffer = ""
+    if buffer.strip():
+        yield buffer
+
+
 class SQLiteStore:
     """The mirror, the pipeline and the ledger in one file."""
 
@@ -58,15 +77,28 @@ class SQLiteStore:
                 parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        if self.path != ":memory:":
-            # WAL lets the review UI read while a sync writes, which is the whole
-            # point of having a store rather than a dict.
-            self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA foreign_keys=ON")
-        # Queue workers each hold their own connection, so two of them can want the
-        # write lock at once. Without a busy timeout that is an immediate
-        # "database is locked" rather than a wait of a few milliseconds.
+        # First, before any statement that can contend. Queue workers each hold their
+        # own connection, so two of them can want the write lock at once; without a busy
+        # timeout that is an immediate "database is locked" rather than a wait of a few
+        # milliseconds. This used to sit *below* the WAL pragma, which is the one place
+        # it could not do its job: switching journal mode takes an exclusive lock, so
+        # opening a connection while another was mid-write raised from the pragma itself
+        # -- and a queue worker builds its store outside any try, so the thread died at
+        # birth and the queue quietly lost a worker.
         self.conn.execute("PRAGMA busy_timeout=5000")
+        if self.path != ":memory:":
+            # WAL lets the review UI read while a sync writes, which is the whole point
+            # of having a store rather than a dict. It is a property of the *file*, so
+            # it only has to be set once, and re-issuing it on every connect is what
+            # made it dangerous: changing journal mode wants an exclusive lock and
+            # SQLite answers SQLITE_BUSY there without consulting the busy handler, so
+            # the timeout above cannot help. Ask first, and let a losing race go -- the
+            # connection that holds the lock is the one already putting the file in WAL.
+            mode = self.conn.execute("PRAGMA journal_mode").fetchone()
+            if not mode or str(mode[0]).lower() != "wal":
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA foreign_keys=ON")
         # Everything from here on goes through the guard. See `_Guarded` for why.
         self.conn = _Guarded(self.conn)  # type: ignore[assignment]
         self.migrate()
@@ -74,19 +106,40 @@ class SQLiteStore:
     # -- schema ----------------------------------------------------------------
 
     def migrate(self) -> list[str]:
+        """Bring the file up to date, with exactly one connection doing it.
+
+        `BEGIN IMMEDIATE` takes the write lock before the check below, and holds it
+        through the last statement -- so the loser of a race waits (up to the busy
+        timeout), then re-reads `schema_migrations` and finds nothing left to do.
+
+        Without that, the check and the work were separate: two connections opening the
+        same fresh database both read an empty `schema_migrations`, both ran the same
+        `ALTER TABLE`, and the second died with "duplicate column name: cover". That is
+        not a rare shape -- it is the desktop app's first launch, where the web process
+        and two queue workers each open the one file at the same moment, and a worker
+        builds its store outside any try, so the thread just ended.
+        """
         applied: list[str] = []
         self.conn.executescript(BOOKKEEPING["sqlite"])
-        done = {r[0] for r in self.conn.execute("SELECT id FROM schema_migrations")}
-        for m in MIGRATIONS:
-            if m.id in done:
-                continue
-            self.conn.executescript(m.sqlite)
-            self.conn.execute(
-                "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?,?)",
-                (m.id, time.time()),
-            )
-            applied.append(m.id)
-        self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            done = {r[0] for r in self.conn.execute("SELECT id FROM schema_migrations")}
+            for m in MIGRATIONS:
+                if m.id in done:
+                    continue
+                # Not `executescript`: it COMMITs before it runs, which would drop the
+                # lock this is holding.
+                for statement in _statements(m.sqlite):
+                    self.conn.execute(statement)
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (id, applied_at) "
+                    "VALUES (?,?)", (m.id, time.time()),
+                )
+                applied.append(m.id)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return applied
 
     def applied_migrations(self) -> list[str]:
@@ -905,6 +958,10 @@ class _Guarded:
     def commit(self) -> None:
         with self._lock:
             self._conn.commit()
+
+    def rollback(self) -> None:
+        with self._lock:
+            self._conn.rollback()
 
     def close(self) -> None:
         with self._lock:
