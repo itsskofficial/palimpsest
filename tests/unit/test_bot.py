@@ -366,3 +366,312 @@ def test_the_patch_apply_path_accepts_a_journal(store):
     assert len(client.rows) == 1
     assert client.rows[0]["properties"]["Why"]["rich_text"][0]["text"]["content"] == \
         "sharper wording"
+
+
+# ---------------------------------------------------------------------------
+# the commands
+# ---------------------------------------------------------------------------
+
+
+def test_help_lists_what_it_can_do(bot):
+    bot.handle_message(message("/help"))
+    bot.handle_message(message("/start"))
+
+    assert len(bot.transport.texts) == 2
+    for text in bot.transport.texts:
+        assert "/pending" in text and "/undo" in text
+
+
+def test_a_command_addressed_to_the_bot_by_name_still_dispatches(bot):
+    """In a group, Telegram delivers `/status@my_bot`.
+
+    Splitting on `@` is the difference between working in a group and answering "I do
+    not know" to every command — which is where a bot shared with anyone actually lives.
+    """
+    bot.handle_message(message("/pending@palimpsest_test_bot"))
+
+    assert bot.transport.texts
+    assert "do not know" not in bot.transport.texts[0].lower()
+
+
+def test_pending_with_nothing_waiting_says_so(bot):
+    bot.handle_message(message("/pending"))
+    assert "Nothing waiting" in bot.transport.texts[0]
+
+
+def test_pending_lists_each_approval_with_its_own_buttons(bot, store):
+    for i in range(2):
+        store.put_approval({
+            "approval_id": f"apr_{i}", "patch_id": f"pch_{i}",
+            "operation_ids": ["op_a", "op_b"], "status": "pending",
+            "summary": f"change number {i}"})
+
+    bot.handle_message(message("/pending"))
+
+    assert "2 waiting for you" in bot.transport.texts[0]
+    # One message per approval, each carrying its own pair of buttons — so tapping
+    # Approve under the second cannot resolve the first.
+    with_buttons = [m for m in bot.transport.sent if m.get("reply_markup")]
+    assert len(with_buttons) == 2
+    markup = with_buttons[0]["reply_markup"]
+    data = [b["callback_data"] for b in markup["inline_keyboard"][0]]
+    assert data[0].startswith("ap:") and data[1].startswith("rj:")
+    assert data[0].split(":")[1] == data[1].split(":")[1]
+
+
+def test_undo_without_an_argument_asks_which_one(bot):
+    bot.handle_message(message("/undo"))
+    assert "Which one" in bot.transport.texts[0]
+
+
+def test_status_reports_the_configuration(bot):
+    bot.cmd_status(42)
+    text = " ".join(bot.transport.texts).lower()
+    assert "notion" in text or "model" in text or "mirror" in text
+
+
+def test_an_empty_message_is_answered_rather_than_ignored(bot):
+    """A forwarded sticker, a location pin, a poll. Silence reads as "it is broken"."""
+    bot.handle_message(message(None))
+    assert "did not find anything" in bot.transport.texts[0]
+
+
+# ---------------------------------------------------------------------------
+# files, which are the point of having it on a phone
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def downloads(bot, monkeypatch, tmp_path):
+    """Make `_download` produce a real file without touching the network."""
+    written = []
+
+    def fake(file_id, suggested):
+        path = tmp_path / (suggested or file_id)
+        path.write_bytes(b"\x00" * 16)
+        written.append(path)
+        return path
+
+    monkeypatch.setattr(bot, "_download", fake)
+    return written
+
+
+def test_a_photo_is_captured_at_its_largest_size(bot, downloads):
+    """Telegram sends a ladder of sizes, smallest first. Taking the first captures a
+    thumbnail, and a whiteboard photographed at 90x60 is not a whiteboard."""
+    bot.handle_message(message(None, photo=[
+        {"file_id": "small", "width": 90}, {"file_id": "big", "width": 1280}]))
+
+    assert bot.queue.submitted, "nothing was queued"
+    assert downloads and downloads[0].exists()
+
+
+def test_a_voice_note_is_given_a_suffix_so_it_reads_as_audio(bot, downloads):
+    """A voice note arrives with no filename, and the transcriber is chosen by suffix.
+    Without this the recording is captured as an unreadable blob that silently produces
+    nothing — which is the single most likely thing to be sent from a phone."""
+    bot.handle_message(message(None, voice={"file_id": "v1", "mime_type": "audio/ogg"}))
+
+    from palimpsest.ingest import detect_kind
+
+    assert bot.queue.submitted
+    spec = bot.queue.submitted[0]["spec"]
+    # Not `.ogg` specifically: `mimetypes.guess_extension("audio/ogg")` answers `.oga`
+    # on some machines and `.ogg` on others, so asserting the literal makes this pass or
+    # fail by platform. What has to hold is what the product depends on.
+    assert detect_kind(spec) == "audio", f"{spec} is not recognised as audio"
+
+
+def test_a_document_keeps_the_name_and_caption_it_was_sent_with(bot, downloads):
+    bot.handle_message(message(
+        None, document={"file_id": "d1", "file_name": "lecture-notes.pdf"},
+        caption="week 4"))
+
+    assert bot.queue.submitted[0]["spec"].endswith("lecture-notes.pdf")
+    assert bot.queue.submitted[0]["title"] == "week 4"
+
+
+def test_a_file_that_will_not_download_says_so_instead_of_raising(bot, monkeypatch):
+    """An exception here would take the polling loop with it, and the bot goes silent
+    until somebody notices and restarts it."""
+    import palimpsest.telegram as mod
+
+    def boom(file_id, suggested):
+        raise mod.TelegramError("file is too big")
+
+    monkeypatch.setattr(bot, "_download", boom)
+    bot.handle_message(message(None, document={"file_id": "d", "file_name": "x.pdf"}))
+
+    assert "Could not fetch" in bot.transport.texts[0]
+    assert not bot.queue.submitted
+
+
+def test_every_file_kind_telegram_sends_is_handled(bot, downloads):
+    for kind, blob in (
+        ("document", {"file_id": "a", "file_name": "a.pdf"}),
+        ("audio", {"file_id": "b", "file_name": "b.mp3"}),
+        ("voice", {"file_id": "c", "mime_type": "audio/ogg"}),
+        ("video", {"file_id": "d", "file_name": "d.mp4"}),
+        ("video_note", {"file_id": "e", "mime_type": "video/mp4"}),
+    ):
+        bot.queue.submitted.clear()
+        bot.handle_message(message(None, **{kind: blob}))
+        assert bot.queue.submitted, f"{kind} was not captured"
+
+
+# ---------------------------------------------------------------------------
+# telling you what came of it
+# ---------------------------------------------------------------------------
+
+
+def _finished(bot, store, **result):
+    job_id = new_id("job_")
+    store.put_job({"job_id": job_id, "kind": "ingest", "spec": "x",
+                   "origin": "telegram:42", "status": "done", "result": result})
+    bot._seen_jobs.add(job_id)
+    return job_id
+
+
+def test_a_finished_capture_is_reported_with_its_breakdown(bot, store):
+    _finished(bot, store, source={"title": "A paper on attention"}, claims=3,
+              patch={"by_relation": {"corroborates": 2, "new": 1}},
+              auto_applied={"applied": 3})
+
+    bot.report_finished()
+
+    text = "\n".join(bot.transport.texts)
+    assert "A paper on attention" in text
+    assert "3 claim(s)" in text
+    assert "2 corroborates" in text and "1 new" in text
+    assert "3 applied automatically" in text
+
+
+def test_a_capture_that_found_nothing_says_that_plainly(bot, store):
+    _finished(bot, store, source={"title": "A cookie banner"}, claims=0)
+
+    bot.report_finished()
+
+    assert "Nothing worth keeping" in "\n".join(bot.transport.texts)
+
+
+def test_a_held_change_is_reported_with_approve_and_reject(bot, store):
+    _finished(bot, store, source={"title": "A claim"}, claims=1,
+              patch={"by_relation": {"refines": 1}},
+              auto_applied={"applied": 0, "held": 1, "approval_id": "apr_x"})
+
+    bot.report_finished()
+
+    with_buttons = [m for m in bot.transport.sent if m.get("reply_markup")]
+    assert with_buttons, "a held change must be actionable from the phone"
+    keyboard = with_buttons[0]["reply_markup"]["inline_keyboard"]
+    assert [b["callback_data"] for b in keyboard[0]] == ["ap:apr_x", "rj:apr_x"]
+
+
+def test_a_contradiction_is_reported_with_what_it_disagrees_with(bot, store):
+    """The one verdict the system will not act on alone has to reach you somewhere, and
+    on a phone this message is the only place it can."""
+    _finished(bot, store, source={"title": "A source"}, claims=1,
+              patch={"by_relation": {}},
+              review=[{"reason": "contradiction",
+                       "claim": {"text": "Per-parameter clipping is better."}}])
+
+    bot.report_finished()
+
+    text = "\n".join(bot.transport.texts)
+    assert "1 needs you" in text
+    assert "contradiction" in text
+    assert "Per-parameter clipping" in text
+
+
+def test_a_failed_capture_reports_the_error(bot, store):
+    job_id = new_id("job_")
+    store.put_job({"job_id": job_id, "kind": "ingest", "spec": "x",
+                   "origin": "telegram:42", "status": "failed",
+                   "error": "that PDF is encrypted"})
+    bot._seen_jobs.add(job_id)
+
+    bot.report_finished()
+
+    assert "encrypted" in "\n".join(bot.transport.texts)
+
+
+def test_a_job_is_reported_once_and_not_again(bot, store):
+    """`report_finished` runs every few seconds. Reporting on each pass would send the
+    same summary forever."""
+    _finished(bot, store, source={"title": "Once"}, claims=1, patch={"by_relation": {}})
+
+    bot.report_finished()
+    first = len(bot.transport.sent)
+    bot.report_finished()
+
+    assert len(bot.transport.sent) == first
+
+
+def test_a_capture_from_another_surface_is_not_pushed_to_your_phone(bot, store):
+    """The queue is shared. A file dropped on the desktop window must not ping a phone
+    that was not involved."""
+    job_id = new_id("job_")
+    store.put_job({"job_id": job_id, "kind": "ingest", "spec": "x", "origin": "ui",
+                   "status": "done", "result": {"claims": 1}})
+    bot._seen_jobs.add(job_id)
+
+    bot.report_finished()
+
+    assert not bot.transport.sent
+
+
+# ---------------------------------------------------------------------------
+# the polling loop
+# ---------------------------------------------------------------------------
+
+
+def test_polling_advances_the_offset_past_what_it_handled(bot, monkeypatch):
+    """Telegram redelivers anything not acknowledged by a higher offset, so getting this
+    wrong makes the bot answer the same message forever."""
+    import palimpsest.telegram as mod
+
+    batches = [[{"update_id": 7, "message": message("/help")},
+                {"update_id": 9, "message": message("/help")}]]
+
+    def fake(token, method, params=None, timeout=None):
+        if method == "getUpdates":
+            return batches.pop(0) if batches else []
+        return bot.transport(token, method, params, timeout)
+
+    monkeypatch.setattr(mod, "_call", fake)
+
+    assert bot.poll_once() == 2
+    assert bot._offset == 10
+
+
+def test_one_bad_update_does_not_stop_the_others(bot, monkeypatch):
+    """An exception escaping this loop kills polling, and the bot goes quiet with no
+    indication of why."""
+    import palimpsest.telegram as mod
+
+    def fake(token, method, params=None, timeout=None):
+        if method == "getUpdates":
+            return [{"update_id": 1, "message": {"chat": {}}},          # no id: raises
+                    {"update_id": 2, "message": message("/help")}]
+        return bot.transport(token, method, params, timeout)
+
+    monkeypatch.setattr(mod, "_call", fake)
+
+    assert bot.poll_once() == 2
+    assert bot.transport.texts, "the good update must still have been handled"
+
+
+# ---------------------------------------------------------------------------
+# formatting
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_that_would_break_telegram_is_escaped():
+    """Telegram's legacy Markdown rejects the whole message on an unbalanced marker, so
+    a page title containing an underscore silently sends nothing at all."""
+    from palimpsest.telegram import _md
+
+    backslash = chr(92)
+    assert _md("snake_case") == "snake" + backslash + "_case"
+    assert _md("*bold*") == backslash + "*bold" + backslash + "*"
+    assert _md("a [link]") == "a " + backslash + "[link]"
