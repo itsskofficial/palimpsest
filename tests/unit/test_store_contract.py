@@ -380,6 +380,29 @@ def test_records_round_trip_by_kind(store):
     assert rows[0]["payload"]["findings"] == 2
 
 
+def test_the_newest_record_is_the_newest_record_even_written_in_one_tick(store):
+    """`created_at` is `time.time()`, ~15ms on Windows, so a loop writes several rows
+    with the same value. The desktop app asks for `limit=1` to render the latest sweep:
+    an arbitrary tie-break served a sweep that had already been superseded, and re-running
+    a sweep right after the first is the ordinary way to use one."""
+    for i in range(6):
+        store.put_record("sweep", {"n": i}, label=str(i))
+
+    assert store.get_records(kind="sweep", limit=1)[0]["payload"]["n"] == 5
+    assert [r["payload"]["n"] for r in store.get_records(kind="sweep")] ==         [5, 4, 3, 2, 1, 0]
+
+
+def test_a_list_written_in_one_tick_does_not_reshuffle_between_reads(store):
+    """These lists are polled. Two reads of a table nothing has touched must agree, or
+    the activity feed visibly jumps around while it is idle."""
+    for i in range(8):
+        store.put_job({"job_id": f"job_{i}", "kind": "ingest", "status": "queued"})
+
+    first = [j["job_id"] for j in store.list_jobs()]
+    assert first == [j["job_id"] for j in store.list_jobs()]
+    assert len(set(first)) == 8
+
+
 def test_memory_is_keyed_and_replaceable(store):
     store.put_memory("preference", "tone", "terse")
     store.put_memory("preference", "tone", "very terse")

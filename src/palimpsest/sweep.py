@@ -181,8 +181,12 @@ def contradictions(store, model: Model, *, index: Index | None = None,
             break
 
     if not pairs:
+        # Recorded, not just returned. `/v1/records` serves the last sweep, so returning
+        # early left yesterday's three contradictions on screen after they were all
+        # fixed -- a report that gets less true the more you act on it.
         result.seconds = time.perf_counter() - started
         result.notes.append("no sufficiently related cross-page passages to compare")
+        store.put_record("sweep_contradictions", result.as_dict(), label="0")
         return result
 
     calls_before = model.usage.calls

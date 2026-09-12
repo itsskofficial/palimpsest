@@ -380,7 +380,11 @@ class SQLiteStore:
         if status:
             sql += " WHERE status=?"
             params.append(status)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        # Ties in `created_at` must not order arbitrarily. It is `time.time()`,
+        # whose resolution on Windows is about 15ms, so rows written in one batch
+        # share a value -- and this list is polled, so an arbitrary tie-break makes
+        # the feed visibly reshuffle between two reads of an unchanged table.
+        sql += " ORDER BY created_at DESC, patch_id DESC LIMIT ?"
         params.append(limit)
         return [dict(r) for r in self.conn.execute(sql, params)]
 
@@ -480,7 +484,11 @@ class SQLiteStore:
         if kind:
             sql += " WHERE kind=?"
             params.append(kind)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        # Ties in `created_at` must not order arbitrarily. It is `time.time()`,
+        # whose resolution on Windows is about 15ms, so rows written in one batch
+        # share a value -- and this list is polled, so an arbitrary tie-break makes
+        # the feed visibly reshuffle between two reads of an unchanged table.
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
         params.append(limit)
         out = []
         for r in self.conn.execute(sql, params):
@@ -711,7 +719,11 @@ class SQLiteStore:
         if suite:
             sql += " WHERE suite=?"
             params.append(suite)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        # Ties in `created_at` must not order arbitrarily. It is `time.time()`,
+        # whose resolution on Windows is about 15ms, so rows written in one batch
+        # share a value -- and this list is polled, so an arbitrary tie-break makes
+        # the feed visibly reshuffle between two reads of an unchanged table.
+        sql += " ORDER BY created_at DESC, run_id DESC LIMIT ?"
         params.append(limit)
         out = []
         for r in self.conn.execute(sql, params):
@@ -753,7 +765,11 @@ class SQLiteStore:
         if status:
             sql += " WHERE status=?"
             params.append(status)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        # Ties in `created_at` must not order arbitrarily. It is `time.time()`,
+        # whose resolution on Windows is about 15ms, so rows written in one batch
+        # share a value -- and this list is polled, so an arbitrary tie-break makes
+        # the feed visibly reshuffle between two reads of an unchanged table.
+        sql += " ORDER BY created_at DESC, job_id DESC LIMIT ?"
         params.append(limit)
         out = []
         for r in self.conn.execute(sql, params):

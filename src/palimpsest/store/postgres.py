@@ -403,7 +403,8 @@ class PostgresStore:
         if status:
             sql += " WHERE status=%s"
             params.append(status)
-        sql += " ORDER BY created_at DESC LIMIT %s"
+        # See the SQLite note: ties must not order arbitrarily.
+        sql += " ORDER BY created_at DESC, patch_id DESC LIMIT %s"
         params.append(limit)
         with self._cur() as cur:
             cur.execute(sql, params)
@@ -493,7 +494,8 @@ class PostgresStore:
         if kind:
             sql += " WHERE kind=%s"
             params.append(kind)
-        sql += " ORDER BY created_at DESC LIMIT %s"
+        # See the SQLite note: ties must not order arbitrarily.
+        sql += " ORDER BY created_at DESC, id DESC LIMIT %s"
         params.append(limit)
         with self._cur() as cur:
             cur.execute(sql, params)
@@ -700,7 +702,8 @@ class PostgresStore:
         if suite:
             sql += " WHERE suite=%s"
             params.append(suite)
-        sql += " ORDER BY created_at DESC LIMIT %s"
+        # See the SQLite note: ties must not order arbitrarily.
+        sql += " ORDER BY created_at DESC, run_id DESC LIMIT %s"
         params.append(limit)
         with self._cur() as cur:
             cur.execute(sql, params)
@@ -739,7 +742,8 @@ class PostgresStore:
         if status:
             sql += " WHERE status=%s"
             params.append(status)
-        sql += " ORDER BY created_at DESC LIMIT %s"
+        # See the SQLite note: ties must not order arbitrarily.
+        sql += " ORDER BY created_at DESC, job_id DESC LIMIT %s"
         params.append(limit)
         with self._cur() as cur:
             cur.execute(sql, params)
