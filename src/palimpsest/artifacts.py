@@ -138,8 +138,14 @@ class LocalArtifacts(_Common):
 
     def _path(self, key: str) -> Path:
         # Refuse to escape the root. `key` can come from an API request.
+        #
+        # `startswith` on the string was the obvious spelling and it is not a
+        # containment check: with a root of `/data/archive`, the key
+        # `../archive-evil/x` resolves to `/data/archive-evil/x`, which starts with the
+        # root and is not inside it. `is_relative_to` compares path components, which is
+        # the question actually being asked.
         target = (self.root / key.lstrip("/")).resolve()
-        if not str(target).startswith(str(self.root)):
+        if not target.is_relative_to(self.root):
             raise ValueError(f"artifact key {key!r} escapes the artifact root")
         return target
 
