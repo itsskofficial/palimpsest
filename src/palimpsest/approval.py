@@ -186,6 +186,13 @@ def _apply_slice(store, patch: Patch, ops: list, notion_factory, journal_factory
     client = notion_factory()
     journal = journal_factory() if journal_factory is not None else None
     result = apply_patch(client, store, slice_, reviewer=reviewer, journal=journal)
+    # `apply_patch` persists the patch it was handed, and it was handed the slice. Left
+    # there, the stored patch is the slice: the held operations vanish, the approval
+    # that names them expands to nothing, and approving it applies nothing. The slice's
+    # operation objects are the full patch's own, already stamped, so writing the full
+    # patch back is the whole fix.
+    patch.status = slice_.status
+    store.put_patch(patch)
     return result.as_dict()
 
 

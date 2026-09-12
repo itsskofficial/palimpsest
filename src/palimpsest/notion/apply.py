@@ -360,6 +360,25 @@ def _execute(client: NotionClient, store, op: Operation, patch: Patch | None = N
     raise ValueError(f"unhandled operation kind {op.kind}")
 
 
+def _archive_created(client: NotionClient, block_id: str) -> None:
+    """Archive a block this patch created, tolerating one that already went.
+
+    An operation that creates a parent and its children (a footnote toggle and the
+    line inside it) records every id it created. Archiving the parent takes the
+    children with it, and Notion then refuses to touch the child: "Can't edit block
+    that is archived". That is the state the inverse wanted, not a failure -- and
+    treating it as one left the whole undo stuck halfway, with the patch marked
+    `partial` and the parent already gone.
+    """
+    try:
+        client.archive_block(block_id)
+    except NotionError as e:
+        if "archived" in str(e).lower():
+            log.info("block %s already archived with its parent; skipping", block_id[:8])
+            return
+        raise
+
+
 def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
     """Perform an inverse. Inverses have their own small vocabulary."""
     kind = inverse["kind"]
@@ -374,7 +393,7 @@ def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
             client.update_block(target, B.text_payload(btype, payload.get("text", "")))
     elif kind == "archive_blocks":
         for bid in payload.get("block_ids", []):
-            client.archive_block(bid)
+            _archive_created(client, bid)
     elif kind == "archive_page":
         client.archive_page(target)
     elif kind == "restore_section":
@@ -390,7 +409,7 @@ def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
             client.append_children(target, snapshot[:100],
                                    after_block_id=payload.get("anchor_block_id"))
         for bid in payload.get("created_block_ids") or []:
-            client.archive_block(bid)
+            _archive_created(client, bid)
     elif kind == OpKind.SET_COVER.value:
         client.set_page_cover(target, payload.get("url"))
     elif kind == "restore_block":

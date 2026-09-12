@@ -411,3 +411,80 @@ def test_the_top_rung_still_needs_writing_to_be_switched_on(ctx):
 
     assert out["applied"] == 0
     assert notion.writes == []
+
+
+# ---------------------------------------------------------------------------
+# applying part of a patch must not destroy the rest of it
+# ---------------------------------------------------------------------------
+
+
+def _split_patch(ctx):
+    """A patch that `gate` will cut in two: one low-risk op, one medium-risk op."""
+    ctx.store.put_blocks([
+        {"block_id": "bk1", "page_id": "pg_a", "type": "paragraph",
+         "position": 0, "text": "cited"},
+        {"block_id": "bk2", "page_id": "pg_a", "type": "paragraph",
+         "position": 1, "text": "superseded"},
+    ])
+    citation = Operation(kind=OpKind.ADD_CITATION, target="bk1",
+                         relation=Relation.CORROBORATES,
+                         payload={"label": "s", "rationale": "r"})
+    rewrite = Operation(kind=OpKind.STRIKE_BLOCK, target="bk2",
+                        relation=Relation.SUPERSEDES,
+                        payload={"text": "superseded", "rationale": "r"})
+    patch = _patch(citation, rewrite)
+    ctx.store.put_patch(patch)
+    return citation, rewrite, patch
+
+
+def test_applying_the_auto_slice_leaves_the_held_operations_intact(ctx):
+    """The stored patch must still be the whole patch.
+
+    `gate` splits a patch into what may apply now and what waits, and hands the first
+    half to `apply_patch` — which persists the patch it was given. Given the slice, it
+    stored the slice: the held operations vanished from the record, the approval that
+    named them expanded to nothing, and tapping Approve applied nothing at all while
+    reporting success.
+
+    This is the worst shape a bug can take here. Nothing errors, the UI shows a tidy
+    "approved", and the change the user explicitly asked for is the one that never
+    happens.
+    """
+    from palimpsest import approval
+
+    citation, rewrite, patch = _split_patch(ctx)
+
+    out = approval.gate(
+        ctx.store, patch,
+        Settings(apply=True, autonomy="low", notion_token="ntn_x"),
+        notion_factory=FakeNotion, journal_factory=None)
+
+    assert out["applied"] == 1 and out["held"] == 1
+
+    stored = ctx.store.get_patch(patch.patch_id)
+    assert stored is not None
+    assert {op.op_id for op in stored.operations} == {citation.op_id, rewrite.op_id}
+
+    # And the approval still resolves to something real.
+    held = ctx.store.get_approval(out["approval_id"])
+    assert held["operation_ids"] == [rewrite.op_id]
+
+
+def test_a_held_approval_still_applies_after_the_auto_half_ran(ctx):
+    """The end-to-end shape of the same bug: approve, and it must actually write."""
+    from palimpsest import approval
+
+    citation, rewrite, patch = _split_patch(ctx)
+
+    notion = FakeNotion()
+    out = approval.gate(ctx.store, patch,
+                        Settings(apply=True, autonomy="low", notion_token="ntn_x"),
+                        notion_factory=lambda: notion, journal_factory=None)
+    before = len(notion.writes)
+
+    resolved = approval.resolve(ctx.store, out["approval_id"], "approved", by="sk",
+                                notion_factory=lambda: notion)
+
+    assert resolved["ok"]
+    assert resolved["applied"] == 1
+    assert len(notion.writes) == before + 1

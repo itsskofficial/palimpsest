@@ -228,3 +228,108 @@ def test_applied_operations_land_in_the_ledger(seeded):
     assert len(history) == 1
     assert history[0]["kind"] == "append_block"
     assert history[0]["inverse"]["kind"] == "archive_blocks"
+
+
+class CascadingNotion(FakeNotion):
+    """A fake that archives like the real thing: parents take their children with them.
+
+    Two behaviours the plain fake does not have, both of which the real API has.
+    `append_children` reports the nested blocks it created as well as the top-level ones,
+    so a footnote toggle and the line inside it both end up in `created_block_ids`. And
+    archiving a block archives its subtree, after which Notion refuses to edit any block
+    in it: "Can't edit block that is archived".
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.children: dict[str, list[str]] = {}
+
+    def append_children(self, parent_id, children, after_block_id=None):
+        self._maybe_fail()
+        created = []
+
+        def add(child, parent):
+            bid = new_id("nb_")
+            self.blocks[bid] = {**child, "id": bid, "archived": False}
+            self.children.setdefault(parent, []).append(bid)
+            created.append({"id": bid, "type": child.get("type", "paragraph")})
+            nested = (child.get(child.get("type", ""), {}) or {}).get("children") or []
+            for grandchild in nested:
+                add(grandchild, bid)
+
+        for child in children:
+            add(child, parent_id)
+        return {"results": created}
+
+    def archive_block(self, block_id):
+        if self.blocks.get(block_id, {}).get("archived"):
+            raise NotionError(400, "validation_error",
+                              "Can't edit block that is archived. "
+                              "You must unarchive the block before editing.")
+        for child in self.children.get(block_id, []):
+            self.blocks[child]["archived"] = True
+        return self.update_block(block_id, {"archived": True})
+
+
+def test_undo_finishes_when_archiving_a_parent_already_took_its_child(seeded):
+    """The undo that got stuck halfway.
+
+    The agent lays out a page, so the blocks it creates nest: a toggle with lines inside
+    it, a bulleted list under a heading. Every id it created is recorded, parents and
+    children alike, and the inverse archives them in order. Archiving the toggle archives
+    its children with it, and the next call is then refused -- "Can't edit block that is
+    archived".
+
+    That refusal is the state the inverse was asking for, but it was raised as a failure.
+    So the patch came back `partial`, the Activity row stayed "partly undone", and a user
+    looking at a page whose rewrite had in fact been fully reverted was told the undo had
+    not worked.
+
+    Nothing here is retried or forced: an "already archived" error is read as success,
+    and any other error still stops the undo -- which is the next test.
+    """
+    notion = CascadingNotion()
+    toggle = {"type": "toggle", "toggle": {
+        "rich_text": [{"type": "text", "text": {"content": "Sources"}}],
+        "children": [{"type": "paragraph", "paragraph": {
+            "rich_text": [{"type": "text", "text": {"content": "one citation"}}]}}]}}
+    op = Operation(kind=OpKind.REWRITE_SECTION, target="pg_1",
+                   payload={"children": [toggle], "replaced": ["bk_1"],
+                            "anchor_block_id": None},
+                   relation=Relation.REFINES)
+    patch = _patch(op)
+    apply_patch(notion, seeded, patch)
+
+    created = op.result["created_block_ids"]
+    assert len(created) > 1, "expected a toggle and the block inside it"
+    assert notion.blocks[created[0]]["archived"] is False
+
+    result = revert_patch(notion, seeded, patch)
+
+    assert result.failed == 0, result.errors
+    assert result.status == "reverted", result.errors
+    for bid in created:
+        assert notion.blocks[bid]["archived"] is True
+    # The old content is back -- rebuilt from the snapshot under a new id rather than
+    # un-trashed, because Notion returns a restored block to the end of the page.
+    live = [b for b in notion.blocks.values() if not b.get("archived")]
+    assert any("the original text" in str(b) for b in live)
+
+
+def test_an_unrelated_failure_still_stops_an_undo(seeded):
+    """The other half of the tolerance: only 'already archived' is forgiven."""
+    notion = CascadingNotion()
+    op = Operation(kind=OpKind.APPEND_BLOCK, target="pg_1",
+                   payload={"text": "a claim"}, relation=Relation.NEW)
+    patch = _patch(op)
+    apply_patch(notion, seeded, patch)
+
+    def boom(block_id):
+        raise NotionError(500, "server_error", "upstream is having a day")
+
+    notion.archive_block = boom
+    result = revert_patch(notion, seeded, patch)
+
+    assert result.failed == 1
+    assert result.status != "reverted"
+    assert any("upstream" in str(e) for e in result.errors)
