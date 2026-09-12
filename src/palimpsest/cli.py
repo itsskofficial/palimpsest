@@ -477,6 +477,21 @@ def cmd_demo(args) -> int:
     # ship somebody's trial run to their own Langfuse project.
     os.environ["PALIMPSEST_TRACE"] = "0"
 
+    # Check for the web server *before* copying a vault and mirroring it. Finding out
+    # afterwards means twenty seconds of apparent progress and then a traceback — which
+    # is exactly what `pip install palimpsest-notion && palimpsest demo`, the first two
+    # lines of the README, used to do.
+    if not args.no_serve:
+        try:
+            import fastapi  # noqa: F401
+            import uvicorn  # noqa: F401
+        except ImportError:
+            raise SystemExit(
+                'The demo opens an app, which needs the web server extra:\n'
+                '  pip install "palimpsest-notion[serve]"\n\n'
+                "Or pass --no-serve to lay the sample vault down without opening it."
+            ) from None
+
     try:
         vault = demo.install(args.dir or demo.default_home(), force=args.reset)
     except RuntimeError as e:

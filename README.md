@@ -16,7 +16,7 @@ true, and recording what it disagrees with rather than quietly picking a winner.
 No account, no API key, nothing of yours writable:
 
 ```bash
-pip install palimpsest-notion
+pip install "palimpsest-notion[serve]"
 palimpsest demo
 ```
 

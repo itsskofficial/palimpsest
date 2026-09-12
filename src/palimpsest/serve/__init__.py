@@ -32,7 +32,15 @@ def run(host: str | None = None, port: int | None = None, db: str | None = None,
     try:
         import uvicorn
     except ImportError as e:  # pragma: no cover - optional extra
-        raise ImportError("pip install 'palimpsest[serve]'") from e
+        # Naming the distribution matters: the package is `palimpsest-notion`, and
+        # `pip install palimpsest[serve]` installs somebody else's project.
+        raise ImportError(
+            "the app needs a web server, which is an optional extra:\n"
+            '  pip install "palimpsest-notion[serve]"\n\n'
+            "The offline core has no dependencies on purpose — the mirror, retrieval, "
+            "the sweeps and undo all work without any — so the server is not installed "
+            "unless you ask for it."
+        ) from e
 
     from palimpsest.config import Settings
     from palimpsest.serve.app import AppState, create_app

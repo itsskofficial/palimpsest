@@ -254,3 +254,32 @@ def test_demo_does_not_touch_the_configured_database(tmp_path, monkeypatch, caps
 
     assert not real.exists()
     assert (tmp_path / "v" / ".palimpsest" / "demo.db").exists()
+
+
+def test_demo_checks_for_the_web_server_before_doing_any_work(tmp_path, monkeypatch):
+    """The first two lines of the README used to end in a traceback.
+
+    The offline core has no dependencies by design, so `pip install palimpsest-notion`
+    gets you no web server — and `demo` copied a vault, mirrored it, printed a cheerful
+    summary, and *then* raised `ImportError`. Twenty seconds of apparent progress
+    followed by a stack trace is the worst possible first thirty seconds, and the error
+    named `palimpsest[serve]`, which is a different project on PyPI.
+    """
+    import builtins
+
+    real = builtins.__import__
+
+    def missing(name, *a, **k):
+        if name in ("fastapi", "uvicorn"):
+            raise ImportError(f"No module named {name!r}")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", missing)
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main(["demo", "--dir", str(tmp_path / "v")])
+
+    message = str(caught.value)
+    assert "palimpsest-notion[serve]" in message, "must name the real distribution"
+    assert "--no-serve" in message, "must offer the way forward"
+    assert not (tmp_path / "v").exists(), "it must fail before doing any work"

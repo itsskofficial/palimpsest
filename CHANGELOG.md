@@ -80,6 +80,13 @@ your real notes.
 - The activity ledger renders as an actual markdown table on a vault, rather than as
   pipe-delimited sentences separated by blank lines.
 
+- **The first two lines of the README ended in a traceback.** The offline core has no
+  dependencies by design, so `pip install palimpsest-notion` gets you no web server —
+  and `palimpsest demo` copied a vault, mirrored it, printed a cheerful summary, and
+  *then* raised `ImportError`. The error named `palimpsest[serve]`, which is a different
+  project on PyPI. The demo now checks first and says what to install, and the README
+  asks for `palimpsest-notion[serve]`.
+
 ### Security
 
 - **`palimpsest demo` no longer inherits credentials from the config file of whoever runs
