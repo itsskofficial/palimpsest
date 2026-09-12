@@ -150,7 +150,19 @@ def install(app, settings, metrics: Metrics) -> None:
     # new. A public bind gets no default and must set the variable deliberately.
     origin_regex = settings.cors_origin_regex
     if origin_regex is None and settings.is_local_only:
-        origin_regex = r"^(chrome-extension|moz-extension|safari-web-extension)://.*$"
+        # Extensions, and the UI's own dev server.
+        #
+        # `next dev` serves the interface on :3000 and calls this API on :8100, so
+        # without the second alternative anyone who tries to work on the UI is met by
+        # "Can't reach the server" and a CORS error in a console they have to think to
+        # open. The interface is most of this project; making it hostile to edit is a
+        # bad trade for a permission that grants nothing.
+        #
+        # Nothing, because this is only defaulted on a local-only bind: on 127.0.0.1 the
+        # API is already reachable by anything running on the machine. A public bind
+        # still gets no default and must set the variable deliberately.
+        origin_regex = (r"^(chrome-extension|moz-extension|safari-web-extension)://.*$"
+                        r"|^http://(localhost|127\.0\.0\.1)(:\d+)?$")
 
     if settings.cors_origins or origin_regex:
         from fastapi.middleware.cors import CORSMiddleware

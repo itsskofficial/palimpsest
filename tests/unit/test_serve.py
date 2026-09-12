@@ -192,3 +192,39 @@ def test_a_notion_token_that_can_see_a_page_carries_no_warning(client, monkeypat
     assert body["ok"] is True
     assert body["shared_pages"] == 1
     assert body["warning"] is None
+
+
+def test_the_ui_dev_server_can_reach_the_api(client):
+    """`next dev` serves the interface on :3000 and calls this API on :8100.
+
+    Without an allowed origin that request is blocked, and what a would-be contributor
+    sees is "Can't reach the server" plus a CORS error in a console they have to think to
+    open. The interface is most of this project; making it hostile to edit is a bad trade
+    for a permission that grants nothing — this is only defaulted on a local-only bind,
+    where anything on the machine can already reach the API.
+    """
+    for origin in ("http://localhost:3000", "http://127.0.0.1:3000"):
+        response = client.options(
+            "/v1/status",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"})
+        assert response.headers.get("access-control-allow-origin") == origin, origin
+
+
+def test_a_browser_extension_can_still_reach_the_api(client):
+    origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    response = client.options(
+        "/v1/jobs",
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
+
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+def test_an_arbitrary_website_is_not_allowed_to_reach_the_api(client):
+    """The regex is an allowance for two specific local cases, not an open door. A page
+    you happen to be reading must not be able to drive the agent that edits your notes."""
+    for origin in ("https://evil.example", "http://localhost.evil.example",
+                   "http://127.0.0.1.evil.example"):
+        response = client.options(
+            "/v1/jobs",
+            headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
+        assert response.headers.get("access-control-allow-origin") != origin, origin

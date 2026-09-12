@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import type { SetupState } from "@/lib/api";
 
 export type Tab = "capture" | "activity" | "ask" | "settings";
@@ -24,21 +24,31 @@ export function Shell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="mx-auto min-h-screen max-w-3xl px-6 pb-24 pt-8">
-      <header className="mb-10 flex items-center justify-between">
+    <div className="relative z-10 mx-auto min-h-screen max-w-3xl px-6 pb-24 pt-8">
+      <motion.header
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+        className="mb-10 flex items-center justify-between"
+      >
         <div className="flex items-baseline gap-3">
-          <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">
+          {/*
+            The wordmark carries a faint gradient rather than a flat fill — the way ink
+            sits heavier where the nib started. Two stops, nothing clever.
+          */}
+          <h1 className="bg-gradient-to-br from-ink via-ink to-sepia bg-clip-text font-display text-2xl font-semibold tracking-tight text-transparent">
             palimpsest
           </h1>
           <ModePill apply={setup.apply} autonomy={setup.autonomy} />
         </div>
 
-        <nav className="flex items-center gap-1 rounded-full border border-rule bg-raised/60 p-1">
+        <nav className="flex items-center gap-1 rounded-full border border-rule bg-raised/70 p-1 shadow-sheet backdrop-blur-sm">
           {TABS.map((t) => (
             <button
               key={t.id}
               onClick={() => onTab(t.id)}
               className="relative rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors"
+              aria-current={tab === t.id ? "page" : undefined}
             >
               {tab === t.id && (
                 // One shared layoutId makes the pill *slide* between tabs rather than
@@ -55,9 +65,24 @@ export function Shell({
             </button>
           ))}
         </nav>
-      </header>
+      </motion.header>
 
-      <main>{children}</main>
+      {/*
+        Each tab enters as its own element rather than the container re-rendering, so the
+        content crossfades and lifts instead of snapping. `mode="wait"` because two
+        panels sliding over each other reads as a glitch at this size.
+      */}
+      <AnimatePresence mode="wait">
+        <motion.main
+          key={tab}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {children}
+        </motion.main>
+      </AnimatePresence>
     </div>
   );
 }

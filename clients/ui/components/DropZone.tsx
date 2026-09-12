@@ -19,6 +19,10 @@ import { DemoPrompts } from "./DemoPrompts";
 export function DropZone({ onCaptured }: { onCaptured: () => void }) {
   const [text, setText] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [focused, setFocused] = useState(false);
+  // Read once, not on every render: `navigator` does not exist during the static
+  // export's prerender, and touching it there throws at build time.
+  const [isMac, setIsMac] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const depth = useRef(0);
@@ -65,6 +69,10 @@ export function DropZone({ onCaptured }: { onCaptured: () => void }) {
   }, [text, onCaptured]);
 
   useEffect(() => {
+    setIsMac(/Mac|iPhone|iPad/.test(navigator.userAgent));
+  }, []);
+
+  useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const files = Array.from(e.clipboardData?.files ?? []);
       if (files.length) {
@@ -101,10 +109,18 @@ export function DropZone({ onCaptured }: { onCaptured: () => void }) {
         }}
         animate={{
           scale: dragging ? 1.012 : 1,
-          borderColor: dragging ? "rgb(var(--sepia))" : "rgb(var(--rule))",
+          borderColor: dragging
+            ? "rgb(var(--sepia))"
+            : focused
+              ? "rgb(var(--gilt) / 0.55)"
+              : "rgb(var(--rule))",
         }}
         transition={{ type: "spring", stiffness: 300, damping: 26 }}
-        className="relative overflow-hidden rounded-2xl border-2 border-dashed bg-raised/70 p-6 shadow-sheet backdrop-blur-sm"
+        // The border goes solid once there is something to write on: dashed says
+        // "drop here", and it should stop saying that the moment you start typing.
+        className={`sheet relative overflow-hidden rounded-2xl border-2 bg-raised/80 p-6 backdrop-blur-md transition-shadow duration-300 ${
+          focused || text ? "border-solid shadow-focus" : "border-dashed shadow-sheet"
+        }`}
       >
         {/* The wash that sweeps across the vellum while a file is over it. */}
         <AnimatePresence>
@@ -124,15 +140,41 @@ export function DropZone({ onCaptured }: { onCaptured: () => void }) {
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void sendText();
           }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           rows={4}
           placeholder="Drop a file, paste a link, or write a thought…"
           className="relative w-full resize-none bg-transparent font-sans text-[15px] leading-relaxed text-ink placeholder:text-faint focus:outline-none"
         />
 
         <div className="relative mt-3 flex items-center justify-between gap-4">
-          <p className="font-mono text-[11px] text-faint">
-            PDF · image · audio · spreadsheet · link · text
-          </p>
+          {/*
+            The hint swaps for the shortcut once there is something to send. Telling
+            somebody the accepted formats while they are mid-sentence is answering a
+            question they stopped asking.
+          */}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.p
+              key={text.trim() ? "shortcut" : "formats"}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.16 }}
+              className="font-mono text-[11px] text-faint"
+            >
+              {text.trim() ? (
+                <>
+                  <kbd className="rounded border border-rule px-1 py-0.5">
+                    {isMac ? <>&#8984;</> : <>Ctrl</>}
+                  </kbd>{" "}
+                  <kbd className="rounded border border-rule px-1 py-0.5">&#8629;</kbd> to
+                  capture
+                </>
+              ) : (
+                <>PDF &middot; image &middot; audio &middot; spreadsheet &middot; link &middot; text</>
+              )}
+            </motion.p>
+          </AnimatePresence>
           <div className="flex items-center gap-2">
             <label className="cursor-pointer rounded-lg border border-rule px-3 py-1.5 text-sm text-soft transition hover:border-sepia hover:text-ink">
               Browse
@@ -143,13 +185,16 @@ export function DropZone({ onCaptured }: { onCaptured: () => void }) {
                 onChange={(e) => void sendFiles(Array.from(e.target.files ?? []))}
               />
             </label>
-            <button
+            <motion.button
               onClick={() => void sendText()}
               disabled={!text.trim() || busy}
-              className="rounded-lg bg-sepia px-4 py-1.5 text-sm font-medium text-vellum transition hover:opacity-90 disabled:opacity-40"
+              whileHover={text.trim() && !busy ? { y: -1 } : undefined}
+              whileTap={text.trim() && !busy ? { scale: 0.97 } : undefined}
+              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              className="rounded-lg bg-sepia px-4 py-1.5 text-sm font-medium text-vellum shadow-sheet transition-opacity hover:opacity-95 disabled:opacity-40 disabled:shadow-none"
             >
               {busy ? "Sending…" : "Capture"}
-            </button>
+            </motion.button>
           </div>
         </div>
 

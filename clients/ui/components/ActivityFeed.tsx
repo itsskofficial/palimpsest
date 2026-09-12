@@ -214,10 +214,31 @@ function Empty({ live }: { live: boolean }) {
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="rounded-xl border border-dashed border-rule px-6 py-12 text-center"
+      className="rounded-xl border border-dashed border-rule px-6 py-10 text-center"
     >
-      <p className="font-display text-lg text-soft">Nothing yet</p>
-      <p className="mx-auto mt-2 max-w-sm text-[14px] text-faint">
+      {/*
+        A quill nib, drawn rather than imported: three paths, no icon dependency, and it
+        inherits `currentColor` so it is correct in both themes without a second asset.
+        It breathes, faintly, so an empty screen is not a dead one.
+      */}
+      <motion.svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mx-auto mb-3 h-7 w-7 text-faint"
+        animate={{ opacity: [0.45, 0.8, 0.45], y: [0, -2, 0] }}
+        transition={{ duration: 4.5, repeat: Infinity, ease: "easeInOut" }}
+        aria-hidden
+      >
+        <path d="M3 21c2.5-4.5 6-9 11-12.5" />
+        <path d="M20.5 3.5c-1 5.5-4 9-7.5 10.5-2 .9-4 .6-5-.4s-1.3-3-.4-5C9.1 5.1 13 2.5 20.5 3.5Z" />
+        <path d="M13.5 10.5 21 3" />
+      </motion.svg>
+      <p className="font-display text-lg text-ink/80">Nothing yet</p>
+      <p className="mx-auto mt-2 max-w-sm text-[14px] leading-relaxed text-soft">
         Drop a PDF, paste a link, or write a thought above. Everything that happens to
         your notes shows up here — and anything that would change what you already wrote
         waits for your approval.
