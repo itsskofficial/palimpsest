@@ -1,30 +1,60 @@
 # palimpsest
 
-**A self-maintaining knowledge base on top of Notion.** Give it anything — a URL, a
-YouTube link, a PDF, a spreadsheet, a photographed whiteboard, or a sentence you typed —
-and it works out how that information relates to what you have already written, then
-proposes small, reversible, fully-cited edits to the right pages.
+**A self-maintaining knowledge base — an AI agent that keeps your Notion (or your
+Obsidian vault) up to date as you learn.** Give it anything: a URL, a YouTube link, a PDF,
+a spreadsheet, a photographed whiteboard, or a sentence you typed. It works out how that
+information relates to what you have already written, then makes small, reversible,
+fully-cited edits to the right pages — rewriting what changed, striking what is no longer
+true, and recording what it disagrees with rather than quietly picking a winner.
 
 > *A palimpsest is a manuscript written over an earlier text, where the earlier writing
 > is still visible underneath.* That is the product: your notes get rewritten as you
 > learn, and every earlier layer stays readable.
 
-**Install the app** — [latest release](https://github.com/itsskofficial/palimpsest/releases/latest)
-— open it, and answer four questions. Or, if you would rather stay in a terminal:
+## Try it in thirty seconds
+
+No account, no API key, nothing of yours writable:
 
 ```bash
-pip install "palimpsest-notion[all] @ git+https://github.com/itsskofficial/palimpsest.git"
+pip install palimpsest-notion
+palimpsest demo
+```
+
+That opens a sample knowledge base of eight pages and the real app pointed at it. Paste
+one of the four suggested facts and watch what happens: one of them argues with a page,
+one sharpens a sentence that was vague, one needs a page that does not exist yet, one has
+to choose between two pages that both want it. Then open the Activity tab and undo any of
+it.
+
+Nothing there is faked. It is the ordinary pipeline — same retrieval, same classifier,
+same planner, same single write door, same undo — with the pages stored as markdown in a
+temporary folder instead of in your workspace. It uses whatever model you have configured,
+falls back to a local [Ollama](https://ollama.com) if you have one, and if it finds
+neither it still opens and says so.
+
+## Then point it at your own notes
+
+```bash
+pip install "palimpsest-notion[all]"
 palimpsest serve
 ```
 
-Either way the setup is the same and it happens once. On a fresh machine you get a short
-wizard — a window in the app, a terminal prompt from `serve` — that asks for your Claude
-and Notion keys, **checks each one on the spot**, and makes the single Notion page it
-works inside for you. Answers go to a config file it reads on every later start, so there
-is nothing to edit by hand and no second copy to keep in sync. Telegram is offered at the
-end and can be skipped; turn it on later from Settings if you want your phone in the loop.
+Or **install the desktop app** from [releases](https://github.com/itsskofficial/palimpsest/releases/latest)
+and open it. Either way the setup is the same and happens once: a short wizard asks for
+your model and Notion keys, **checks each one on the spot**, and makes the single Notion
+page it works inside. Answers go to a config file it reads on every later start, so there
+is nothing to edit by hand. Telegram is offered at the end and can be skipped.
 
 Then drop something on the window, and watch what it proposes.
+
+**Two backends.** Notion is the one this was built for. The other is a folder of markdown
+files — an Obsidian vault, a git repo, anything you can open with `cat`:
+
+```bash
+PALIMPSEST_BACKEND=markdown PALIMPSEST_VAULT=~/vault palimpsest serve
+```
+
+Same pipeline, same guarantees. See [Where your notes live](#where-your-notes-live).
 
 Prefer the command line? Everything the bot does is also a command:
 
@@ -175,19 +205,32 @@ Two independent switches, because the failure they prevent is unrecoverable:
 
 ```bash
 PALIMPSEST_APPLY=0          # default. Nothing is ever written.
-PALIMPSEST_AUTONOMY=none    # none | low | medium.  There is no "high".
+PALIMPSEST_AUTONOMY=none    # none | low | medium | full | everything
 ```
 
 `autonomy` names the highest **risk tier** that may apply without review. `low` covers
-`new` and `corroborates`. `medium` adds `refines`, `supersedes`, `duplicate`, `extends`.
-Nothing covers `contradicts` — the enum has no value for it, the planner refuses to emit
-an operation for it, and the apply route rejects one if it somehow appears. Three locks
-on the same door.
+`new` and `corroborates`. `medium` adds `refines`, `supersedes`, `duplicate` and
+`extends`. `full` is every tier that is automatable at all.
+
+`everything` is the only rung that touches a contradiction, and what it does is narrower
+than it sounds: it **records** the disagreement in a callout directly beneath the line it
+argues with, citing both sources. It does not decide which one is true — nothing here
+ever does, at any setting — and it inverts by removing one block, so a reader who
+disagrees with the machine loses nothing by undoing it. "May record the argument" and
+"may settle the argument" are different powers, and only the first is on offer.
+
+How sure the classifier must be scales with what the edit would do: **0.60** for a purely
+additive block, **0.75** for one that rewrites a sentence, **0.90** for one that changes
+what an existing sentence means. `PALIMPSEST_MIN_CONFIDENCE` moves the whole scale.
 
 Beyond that: the applier **writes each operation's inverse before running it** (Notion
 has no transactions, so a patch interrupted at operation six must still be reversible),
-it **never hard-deletes** (strike-through and Notion's restorable trash only), and it
-**stops at the first failure** with status `partial` rather than ploughing on.
+it **never hard-deletes** (strike-through and restorable trash only), and it **stops at
+the first failure** with status `partial` rather than ploughing on.
+
+None of the above is a promise you have to take on trust. The invariants are pinned by
+[`tests/unit/test_safety.py`](tests/unit/test_safety.py), which runs offline with no key
+in every CI run, and they are written out in [docs/SAFETY.md](docs/SAFETY.md).
 
 ---
 
@@ -195,10 +238,12 @@ it **never hard-deletes** (strike-through and Notion's restorable trash only), a
 
 | Command | What it does |
 |---|---|
-| `palimpsest sync [--full]` | pull Notion into the mirror |
+| `palimpsest demo` | the whole thing on a sample vault. No account, no key. |
+| `palimpsest sync [--full]` | pull the workspace into the mirror |
 | `palimpsest ingest <spec>` | run a source through the pipeline. **Writes nothing.** |
 | `palimpsest patches` / `patch <id>` | list / show proposed patches |
 | `palimpsest apply <id> --reviewer <you>` | the only command that changes your notes |
+| `palimpsest eval leaderboard` | score several models against the golden set |
 | `palimpsest undo <id>` | revert exactly |
 | `palimpsest sweep <kind>` | `duplicates` · `contradictions` · `stale` · `questions` |
 | `palimpsest telegram` | the bot: message it anything |
@@ -331,6 +376,44 @@ short step from "quietly drop the boring half":
 Ask the agent to tidy a page and it uses the same machinery — `rewrite_page` is a tool it
 has, gated exactly like the smallest citation.
 
+## Where your notes live
+
+Notion is what this was built for and is still the default. But the whole pipeline talks
+to the workspace through **seventeen methods** behind a single write door, so a second
+backend is a second implementation of that interface rather than a fork of anything:
+
+```bash
+PALIMPSEST_BACKEND=notion                          # the default
+PALIMPSEST_BACKEND=markdown PALIMPSEST_VAULT=~/vault
+```
+
+A markdown vault is a folder of `.md` files with a small YAML header — an Obsidian vault,
+a git repo, plain files you can `grep`. Headings, nested lists, to-dos, code, quotes,
+images, and Obsidian's callout syntax for callouts and toggles all round trip byte for
+byte, so the tool never rewrites a file it merely read.
+
+The awkward part is block identity. Notion hands out ids; a file has none. So they live in
+a sidecar under `.palimpsest/` and are re-aligned against the file on every read — exact
+text first, then same-type-nearest-position. **Edit a page in Obsidian while this is
+running and the ids survive**, which is what keeps provenance and exact undo true across
+an edit the tool did not make.
+
+Three things follow from having a second backend, and each matters more than the feature:
+
+- **You can try the product without risking your notes.** `palimpsest demo` is this
+  backend pointed at a sample vault.
+- **The write path is testable offline.** Ingest → classify → plan → apply → undo runs
+  end to end in CI with no network and no key. It used to be that the only honest test of
+  a write was against a live workspace, which meant it mostly did not happen.
+- **Your notes are not hostage to one vendor.** A knowledge base you feed for years
+  should outlive the app that maintains it.
+
+What a vault does not have is databases, so the activity ledger is a markdown table
+instead — which is what a database view is for a reader anyway, and it renders in Obsidian
+and on GitHub.
+
+---
+
 ## Any model, including none of them
 
 The model is configuration, not code. `PALIMPSEST_MODEL_BASE_URL` points at anything
@@ -342,13 +425,20 @@ That freedom has a price, and the eval is how you see it rather than discover it
 model below classified the same twenty labelled cases from the workspace committed at
 `src/palimpsest/evals/data/workspace.json`:
 
-| model | weighted F1 | contradiction recall | |
-|---|---|---|---|
-| `anthropic/claude-sonnet-5` | **0.95** | 1.00 | PASS |
-| `ollama/qwen3:8b` | 0.65 | 0.67 | fail |
-| `groq/openai/gpt-oss-120b` | 0.59 | 0.67 | fail |
-| `ollama/qwen2.5:7b` | 0.42 | 0.33 | fail |
-| `ollama/llama3.1:8b` | 0.27 | 0.00 | fail |
+```bash
+palimpsest eval leaderboard --models anthropic/claude-sonnet-5,ollama/qwen3:8b
+```
+
+| model | weighted F1 | contradiction recall | duplicate recall | |
+|---|---|---|---|---|
+| `anthropic/claude-sonnet-5` | **0.95** | 1.00 | 1.00 | PASS |
+| `ollama/qwen3:8b` | 0.57 | 0.67 | 0.00 | fail |
+| `groq/openai/gpt-oss-120b` | 0.59 | 0.67 | — | fail |
+| `ollama/qwen2.5:7b` | 0.42 | 0.33 | — | fail |
+| `ollama/llama3.1:8b` | 0.27 | 0.00 | — | fail |
+
+Local models vary run to run — `qwen3:8b` has scored anywhere from 0.57 to 0.65 on this
+set — which is itself worth knowing before you hand one write access.
 
 Contradiction recall is the column to read. A model that misses two contradictions in
 three is not a model to hand write access to, whatever its headline number, which is why

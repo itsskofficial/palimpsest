@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "palimpsest-notion"
-version = "0.1.0"
+version = "0.2.0"
 description = "A self-maintaining knowledge base on top of Notion: extracts claims from anything, classifies how each one relates to what you already wrote, and applies small reversible patches with full provenance."
 readme = "README.md"
 license = { text = "Apache-2.0" }

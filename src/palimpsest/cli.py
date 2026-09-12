@@ -336,6 +336,32 @@ def cmd_eval(args) -> int:
             _emit(metrics, args.out)
             return 0 if metrics.get("passed") else 1
 
+        if args.suite == "leaderboard":
+            from palimpsest import embed
+            from palimpsest.evals import fixture, leaderboard
+            from palimpsest.retrieve import Index
+
+            examples = None
+            if args.fixture:
+                fixture.seed(store)
+                examples = fixture.golden_examples()
+            index = Index(store, embedder=embed.resolve(settings, store=store))
+            specs = [m.strip() for m in (args.models or "").split(",") if m.strip()]
+            if not specs:
+                print("name the models to compare, for example:\n"
+                      "  palimpsest eval leaderboard --models "
+                      "anthropic/claude-sonnet-5,ollama/qwen3:8b")
+                return 2
+            rows = leaderboard.run(store, index, specs, settings=settings,
+                                   examples=examples)
+            print()
+            print(leaderboard.render(rows))
+            for row in rows:
+                if not row.get("error"):
+                    report.record(store, "component", row, model=row["model"])
+            _emit({"rows": rows}, args.out)
+            return 0 if any(r.get("passed") for r in rows) else 1
+
         if args.suite == "component":
             from palimpsest import embed
             from palimpsest.evals import fixture
@@ -784,7 +810,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_organise)
 
     sp = sub.add_parser("eval", help="measure retrieval and the classifier")
-    sp.add_argument("suite", choices=["retrieval", "component", "bootstrap", "history"])
+    sp.add_argument("suite", choices=["retrieval", "component", "leaderboard",
+                                      "bootstrap", "history"])
     common(sp)
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--fixture", action="store_true", default=True,
@@ -792,6 +819,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "(default; the same notes on every machine)")
     sp.add_argument("--mine", dest="fixture", action="store_false",
                     help="run against your own mirror and your own labelled examples")
+    sp.add_argument("--models", default=None,
+                    help="leaderboard only: comma-separated provider/model specs, "
+                         "e.g. anthropic/claude-sonnet-5,ollama/qwen3:8b")
     sp.set_defaults(func=cmd_eval)
 
     sp = sub.add_parser("agent", help="talk to your notes from the terminal")

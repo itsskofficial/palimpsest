@@ -488,3 +488,47 @@ def test_a_held_approval_still_applies_after_the_auto_half_ran(ctx):
     assert resolved["ok"]
     assert resolved["applied"] == 1
     assert len(notion.writes) == before + 1
+
+
+# ---------------------------------------------------------------------------
+# the document that describes all of the above must not drift from it
+# ---------------------------------------------------------------------------
+
+
+def test_the_safety_document_cites_tests_that_exist():
+    """`docs/SAFETY.md` is the argument a stranger reads before granting write access.
+
+    It works by pointing at the tests that enforce each claim, which makes it exactly as
+    trustworthy as those pointers are. A renamed test would leave the document confidently
+    citing something that is no longer there — and a reader who checks one reference and
+    finds nothing has no reason to believe the rest of it.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    document = (root / "docs" / "SAFETY.md").read_text(encoding="utf-8")
+    defined = set()
+    for path in (root / "tests").rglob("test_*.py"):
+        defined.add(path.stem)          # the document cites whole files too
+        defined.update(re.findall(r"^def (test_\w+)", path.read_text(encoding="utf-8"),
+                                  re.MULTILINE))
+
+    cited = set(re.findall(r"(test_\w+)", document))
+    missing = sorted(cited - defined)
+    assert not missing, (
+        f"docs/SAFETY.md cites tests that no longer exist: {missing}.\n"
+        "Rename the reference or restore the test — do not delete the claim.")
+
+
+def test_the_safety_document_covers_every_autonomy_level():
+    """A level added to the ladder and not to the document is a permission granted in
+    silence, which is the one way this file could mislead while every test still passes."""
+    from pathlib import Path
+
+    from palimpsest.config import AUTONOMY_LEVELS
+
+    document = (Path(__file__).resolve().parents[2] / "docs" / "SAFETY.md").read_text(
+        encoding="utf-8")
+    for level in AUTONOMY_LEVELS:
+        assert f"`{level}`" in document, f"docs/SAFETY.md does not mention {level!r}"
