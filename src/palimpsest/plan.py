@@ -323,7 +323,12 @@ def _footnote_op(judgement: Judgement, claim: Claim, source: Source, text: str,
         target=judgement.target_block_id or "",
         payload={
             "text": text,
-            "source_title": _cite_text(source, claim),
+            # The title alone. `footnote_block` joins it with the locator itself, so
+            # passing `_cite_text` here -- which already does that join -- printed the
+            # locator twice on every footnote the product has ever written:
+            # "A correction on sleep - document - document". The citation under an
+            # edited block is the visible product, and it was visibly wrong.
+            "source_title": source.title or source.kind,
             "locator": claim.anchor.locator if claim.anchor else None,
             "url": _anchor_url(source, claim),
             "parent_page_id": (block or {}).get("page_id") or judgement.target_page_id,

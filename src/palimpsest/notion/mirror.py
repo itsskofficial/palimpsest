@@ -303,9 +303,22 @@ def sync(client: Workspace, store, *, incremental: bool = True,
     pages = list(client.search_pages())
     if roots:
         wanted = {r.replace("-", "") for r in roots}
+        visible = len(pages)
         pages = [p for p in pages
                  if (p.get("id") or "").replace("-", "") in wanted
                  or (_parent(p)[0] or "") in wanted]
+        if visible and not pages:
+            # "0 page(s)" on its own is the least helpful thing this can say, and it is
+            # the single most common way a Notion setup goes wrong: the integration is
+            # shared with a page, the root id names a different one, and everything the
+            # mirror can see is filtered away. It is also what happens to anyone who
+            # moves to a vault and leaves PALIMPSEST_NOTION_ROOTS behind, since a vault
+            # page id can never match a Notion one.
+            result.errors.append(
+                f"PALIMPSEST_NOTION_ROOTS names {len(wanted)} page(s), and none of them "
+                f"is among the {visible} this integration can see — so everything was "
+                f"filtered out. Check the root ids, or unset it to mirror everything "
+                f"that has been shared.")
     if limit:
         pages = pages[:limit]
 

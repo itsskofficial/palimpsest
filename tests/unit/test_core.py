@@ -134,6 +134,31 @@ def test_refines_footnotes_the_previous_wording(mirror, claim, source):
     assert OpKind.INSERT_FOOTNOTE in kinds
 
 
+def test_a_footnote_names_its_source_and_its_locator_once_each(mirror, claim, source):
+    """The citation under an edited block is the visible product -- it is what makes a
+    six-month-old sentence auditable rather than merely present. `footnote_block` joins
+    the title and the locator itself, so handing it a string that had already been
+    joined printed the locator twice on every footnote: "A post - Introduction -
+    Introduction"."""
+    from palimpsest.notion.blocks import footnote_block
+
+    judgement = Judgement(claim_id=claim.claim_id, relation=Relation.REFINES,
+                          confidence=0.9, target_page_id="pg_optim",
+                          target_block_id="bk_opt_1", existing_text="AdamW is better")
+    result = plan([judgement], {claim.claim_id: claim}, source, mirror, footnotes=True)
+
+    op = next(o for o in result.patch.operations
+              if o.kind is OpKind.INSERT_FOOTNOTE)
+    payload = op.payload
+    assert payload["source_title"] == source.title
+    assert payload["locator"] == claim.anchor.locator
+
+    # And the rendered block, which is what a reader actually sees.
+    rendered = str(footnote_block(payload["text"], payload["source_title"],
+                                  payload["locator"], payload["url"]))
+    assert rendered.count(claim.anchor.locator) == 1
+
+
 # ---------------------------------------------------------------------------
 # reversibility
 # ---------------------------------------------------------------------------

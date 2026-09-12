@@ -224,7 +224,7 @@ def test_the_file_on_disk_stays_clean_markdown(vault):
     """No ids, no markers, nothing that would look like damage in Obsidian."""
     page = vault.create_page("", "Readable", children=to_blocks(SAMPLE))
     body = vault._path_for(page["id"]).read_text(encoding="utf-8")
-    head, _, content = body.partition("---\n\n")
+    _, _, content = body.partition("---\n\n")
     assert "mb_" not in content and "<!--" not in content
     assert content.strip() == SAMPLE
 

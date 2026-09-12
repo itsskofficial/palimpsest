@@ -812,24 +812,37 @@ class Settings:
     # -- rendering -------------------------------------------------------------
 
     def as_dict(self, reveal: bool = False) -> dict:
+        # A vault install has no Notion, by choice. Reporting "notion: MISSING" and
+        # "journal: on (Notion databases)" to somebody who picked the markdown backend
+        # is the same mistake `problems()` used to make: a line that is visibly false
+        # teaches the reader to skip the ones that are true. Same reasoning, same fix.
+        vault = self.backend == "markdown"
         return {
             "environment": self.environment,
+            "backend": self.backend,
             "release": self.release,
             "database": self.database_url if reveal else redact(self.database_url, "url"),
             "database_kind": "postgres" if self.uses_postgres else "sqlite",
             "supabase": self.is_supabase,
             "pooler": self.uses_pooler,
             "archive": self.artifact_url if reveal else redact(self.artifact_url, "url"),
-            "notion": "configured" if self.has_notion else "MISSING",
-            "notion_version": self.notion_version,
-            "notion_roots": list(self.notion_root_pages) or ["(whole workspace)"],
+            "workspace": (self.vault_path or "MISSING (PALIMPSEST_VAULT is not set)")
+                         if vault else
+                         ("configured" if self.has_notion else "MISSING"),
+            "notion": ("not used (the backend is a markdown vault)" if vault else
+                       "configured" if self.has_notion else "MISSING"),
+            "notion_version": None if vault else self.notion_version,
+            "notion_roots": ([] if vault else
+                             list(self.notion_root_pages) or ["(whole workspace)"]),
             "model": self._model_line(),
             "effort": {"extract": self.extract_effort, "classify": self.classify_effort},
             "firecrawl": "configured" if self.firecrawl_api_key else "off (stdlib fallback)",
             "transcribe": self.transcriber or "MISSING (audio cannot be ingested)",
             "telegram": (f"paired with {len(self.telegram_allowed_chats)} chat(s)"
                          if self.telegram_token else "off"),
-            "journal": "on (Notion databases)" if self.journal else "off (SQLite only)",
+            "journal": ("off (SQLite only)" if not self.journal else
+                        "off (SQLite only; a vault has nowhere to put the databases)"
+                        if vault else "on (Notion databases)"),
             "embeddings": self._embed_line(),
             "apply": self.apply,
             "autonomy": self.autonomy,
@@ -890,7 +903,10 @@ class Settings:
             out.append("TELEGRAM_BOT_TOKEN is set but TELEGRAM_ALLOWED_CHATS is empty — "
                        "the bot will refuse every chat and reply with its id, which is "
                        "how you pair it")
-        if self.journal and not self.notion_root_pages:
+        # Not on a vault: the journal is a pair of Notion databases and there is no
+        # Notion, so telling someone to set PALIMPSEST_NOTION_ROOTS is an instruction
+        # that cannot be followed and would not help if it were.
+        if self.backend != "markdown" and self.journal and not self.notion_root_pages:
             out.append("PALIMPSEST_JOURNAL is on but PALIMPSEST_NOTION_ROOTS is not set — "
                        "there is nowhere to create the Changes and Sources databases, so "
                        "the ledger stays in SQLite only")
