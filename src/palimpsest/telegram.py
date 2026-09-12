@@ -365,7 +365,7 @@ class Bot:
         self.send(chat_id, "\n".join(lines))
 
     def cmd_sync(self, chat_id: int) -> None:
-        if not self.settings.has_notion:
+        if not self.settings.has_workspace:
             return self._say(chat_id, "`NOTION_TOKEN` is not set.")
         self.send(chat_id, "Syncing…")
 
@@ -423,7 +423,7 @@ class Bot:
                     notion_factory=(lambda: NotionClient(
                         self.settings.notion_token or "",
                         version=self.settings.notion_version))
-                    if self.settings.has_notion else None,
+                    if self.settings.has_workspace else None,
                     summary=f"organise: {result.stats.get('pages_moved', 0)} move(s)")
                 hubs = "\n".join(f"• {h.get('icon','')} {_md(h['name'])}"
                                  for h in result.hubs[:12])
@@ -469,7 +469,7 @@ class Bot:
                 patch = ctx.store.get_patch(patch_id)
                 if patch is None:
                     return self._say(chat_id, f"`{patch_id}` is gone.")
-                if not (self.settings.apply and self.settings.has_notion):
+                if not (self.settings.apply and self.settings.has_workspace):
                     return self._say(chat_id, "Writes are off, so there's nothing "
                                               "applied to undo.")
                 result = revert_patch(ctx.new_notion(), ctx.store, patch,
@@ -507,8 +507,8 @@ class Bot:
             try:
                 result = approval.resolve(
                     ctx.store, approval_id, decision, by=f"telegram:{chat_id}",
-                    notion_factory=ctx.new_notion if self.settings.has_notion else None,
-                    journal_factory=ctx.new_journal if self.settings.has_notion else None)
+                    notion_factory=ctx.new_notion if self.settings.has_workspace else None,
+                    journal_factory=ctx.new_journal if self.settings.has_workspace else None)
                 if decision == "rejected":
                     msg = "❌ Rejected. Nothing was written."
                 elif result.get("ok"):
@@ -698,7 +698,7 @@ def run(settings=None, queue=None) -> None:
                 archive=open_artifacts(settings.artifact_url),
                 notion_factory=(lambda: NotionClient(settings.notion_token or "",
                                                      version=settings.notion_version))
-                if settings.has_notion else None)},
+                if settings.has_workspace else None)},
             workers=settings.workers,
         ).start()
 

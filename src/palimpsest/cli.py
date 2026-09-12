@@ -50,10 +50,11 @@ def _model(settings, required: bool = True):
 
 
 def _notion(settings):
-    from palimpsest.notion.client import NotionClient
+    """The workspace this configuration points at — Notion, or a markdown vault."""
+    from palimpsest import workspace
 
     try:
-        return NotionClient(settings.notion_token or "", version=settings.notion_version)
+        return workspace.open(settings)
     except ValueError as e:
         raise SystemExit(str(e)) from e
 

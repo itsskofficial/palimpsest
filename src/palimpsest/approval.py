@@ -91,7 +91,7 @@ def gate(store, patch: Patch, settings: Any, *, notion_factory=None,
     outcome: dict[str, Any] = {"applied": 0, "held": len(held), "blocked": len(blocked)}
 
     # -- apply the auto slice, if writing is possible at all --------------------
-    if auto and settings.apply and settings.has_notion and notion_factory is not None:
+    if auto and settings.apply and settings.has_workspace and notion_factory is not None:
         applied = _apply_slice(store, patch, auto, notion_factory, journal_factory,
                                reviewer=reviewer)
         outcome.update(applied=applied.get("applied", 0),

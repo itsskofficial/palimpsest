@@ -326,8 +326,8 @@ def register(app, st) -> None:
         result = approval.resolve(
             st.store, approval_id, decision,
             by=payload.get("by") or "ui",
-            notion_factory=(lambda: st.notion) if st.settings.has_notion else None,
-            journal_factory=(lambda: st.journal) if st.settings.has_notion else None)
+            notion_factory=(lambda: st.notion) if st.settings.has_workspace else None,
+            journal_factory=(lambda: st.journal) if st.settings.has_workspace else None)
         # Any failure is a failure, including a rejection. The `and decision ==
         # "approved"` this used to carry meant that rejecting an approval which was
         # missing, already resolved or expired returned 200 with `ok: false` — so the UI
@@ -396,7 +396,7 @@ def register(app, st) -> None:
         patch = st.store.get_patch(patch_id)
         if patch is None:
             raise HTTPException(404, f"no patch {patch_id}")
-        if not st.settings.has_notion:
+        if not st.settings.has_workspace:
             raise HTTPException(400, "NOTION_TOKEN is not set, so nothing can be undone")
         if not any(op.applied_at for op in patch.operations):
             raise HTTPException(409, "that patch was never applied, so there is nothing "

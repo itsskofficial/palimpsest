@@ -73,12 +73,11 @@ class ToolContext:
     # -- factories (fresh objects, for thread safety) --------------------------
 
     def new_notion(self):
-        from palimpsest.notion.client import NotionClient
+        from palimpsest import workspace
 
-        if not self.settings.has_notion:
+        if self.settings.backend == "notion" and not self.settings.has_notion:
             raise RuntimeError("NOTION_TOKEN is not set")
-        return NotionClient(self.settings.notion_token or "",
-                            version=self.settings.notion_version)
+        return workspace.open(self.settings)
 
     def new_journal(self):
         from palimpsest.notion.journal import Journal

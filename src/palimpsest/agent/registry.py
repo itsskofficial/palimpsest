@@ -149,7 +149,7 @@ def _check_job(ctx: ToolContext, job_id: str) -> dict:
 def _sync_mirror(ctx: ToolContext, incremental: bool = True) -> dict:
     from palimpsest.notion import mirror
 
-    if not ctx.settings.has_notion:
+    if not ctx.settings.has_workspace:
         return {"error": "NOTION_TOKEN is not set"}
     result = mirror.sync(ctx.new_notion(), ctx.store, incremental=bool(incremental),
                          roots=ctx.settings.notion_root_pages)
@@ -206,8 +206,8 @@ def _apply_patch(ctx: ToolContext, patch_id: str,
 
     outcome = approval.gate(
         ctx.store, patch, ctx.settings,
-        notion_factory=ctx.new_notion if ctx.settings.has_notion else None,
-        journal_factory=ctx.new_journal if ctx.settings.has_notion else None,
+        notion_factory=ctx.new_notion if ctx.settings.has_workspace else None,
+        journal_factory=ctx.new_journal if ctx.settings.has_workspace else None,
         reviewer="agent")
     ctx.refresh_index()
     # The agent must not imply it wrote something it only queued for approval.
@@ -223,7 +223,7 @@ def _undo_patch(ctx: ToolContext, patch_id: str) -> dict:
     patch = ctx.store.get_patch(patch_id)
     if patch is None:
         return {"error": f"no patch {patch_id}"}
-    if not (ctx.settings.apply and ctx.settings.has_notion):
+    if not (ctx.settings.apply and ctx.settings.has_workspace):
         return {"error": "writes are off (PALIMPSEST_APPLY=0) or NOTION_TOKEN is unset; "
                          "nothing to undo was applied"}
     result = revert_patch(ctx.new_notion(), ctx.store, patch, reviewer="agent",
@@ -307,8 +307,8 @@ def _rewrite_page(ctx: ToolContext, page_id: str, instruction: str = "") -> dict
 
     out = approval.gate(
         ctx.store, patch, ctx.settings,
-        notion_factory=ctx.new_notion if ctx.settings.has_notion else None,
-        journal_factory=ctx.new_journal if ctx.settings.has_notion else None,
+        notion_factory=ctx.new_notion if ctx.settings.has_workspace else None,
+        journal_factory=ctx.new_journal if ctx.settings.has_workspace else None,
         chat_id=current_chat.get(), reviewer="agent",
         summary=f"rewrite of {page.get('title', page_id)}")
     ctx.refresh_index()

@@ -128,6 +128,11 @@ NEVER_AUTOMATIC = frozenset({"high"})
 #: same as the system deciding which of two claims is true — it never does that, at any
 #: setting. What it applies is a *record of the disagreement*: both sides, both sources,
 #: side by side, in one reversible operation. See `plan._contradiction_ops`.
+#: The backends a knowledge base can live in. Both implement the same seventeen methods
+#: and both go through the same write door, so nothing above `workspace` knows which is
+#: in use -- see `palimpsest.workspace`.
+BACKENDS = ("notion", "markdown")
+
 AUTONOMY_LEVELS: dict[str, frozenset[str]] = {
     "none": frozenset(),
     "low": frozenset({"low"}),
@@ -436,6 +441,15 @@ class Settings:
     database_url: str = "sqlite:///palimpsest.db"
     artifact_url: str = "file://./archive"
 
+    # -- the workspace ---------------------------------------------------------
+    #: Which backend holds the knowledge base. `notion` is the product; `markdown` is a
+    #: folder of `.md` files -- an Obsidian vault, a git repo, the demo. The choice is
+    #: one line here because there is exactly one write door, so a second backend is a
+    #: second implementation of seventeen methods rather than a fork of the pipeline.
+    backend: str = "notion"
+    #: Where the markdown vault lives. Ignored unless `backend` is `markdown`.
+    vault_path: str | None = None
+
     # -- notion ----------------------------------------------------------------
     notion_token: str | None = None
     #: Pinned deliberately. Notion's API is versioned by date and the 2025-09-03
@@ -537,6 +551,8 @@ class Settings:
             or os.environ.get("DATABASE_URL")
             or "sqlite:///palimpsest.db",
             artifact_url=os.environ.get("PALIMPSEST_ARTIFACT_URL", "file://./archive"),
+            backend=os.environ.get("PALIMPSEST_BACKEND", "notion").strip().lower(),
+            vault_path=os.environ.get("PALIMPSEST_VAULT") or None,
             notion_token=os.environ.get("NOTION_TOKEN") or None,
             notion_version=os.environ.get("NOTION_VERSION", "2026-03-11"),
             notion_root_pages=tuple(r.strip() for r in roots.split(",") if r.strip()),
@@ -649,6 +665,20 @@ class Settings:
 
     @property
     def has_notion(self) -> bool:
+        """Whether Notion specifically is configured. For display and onboarding."""
+        return bool(self.notion_token)
+
+    @property
+    def has_workspace(self) -> bool:
+        """Whether there is a knowledge base to read and write at all.
+
+        Distinct from `has_notion`, and the distinction matters: every site that gates a
+        *write* asks this one, so pointing the app at a markdown vault does not silently
+        disable applying. `has_notion` stays for the places that genuinely mean Notion —
+        the setup wizard, the status line, the agent's description of its own tools.
+        """
+        if self.backend == "markdown":
+            return bool(self.vault_path)
         return bool(self.notion_token)
 
     @property
@@ -682,6 +712,16 @@ class Settings:
     def validate(self) -> Settings:
         if self.log_level not in ("critical", "error", "warning", "info", "debug", "trace"):
             raise ValueError(f"PALIMPSEST_LOG_LEVEL={self.log_level!r} is not a log level")
+        if self.backend not in BACKENDS:
+            raise ValueError(
+                f"PALIMPSEST_BACKEND={self.backend!r} is not a backend. Use one of: "
+                f"{', '.join(sorted(BACKENDS))}."
+            )
+        if self.backend == "markdown" and not self.vault_path:
+            raise ValueError(
+                "PALIMPSEST_BACKEND=markdown needs PALIMPSEST_VAULT to say which folder "
+                "holds the vault."
+            )
         if self.autonomy not in AUTONOMY_LEVELS:
             raise ValueError(
                 f"PALIMPSEST_AUTONOMY={self.autonomy!r} is not valid. Use one of: "

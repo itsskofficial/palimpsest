@@ -98,11 +98,10 @@ class AppState:
 
     @property
     def notion(self):
-        from palimpsest.notion.client import NotionClient
+        from palimpsest import workspace
 
         if self._notion is None:
-            self._notion = NotionClient(self.settings.notion_token or "",
-                                        version=self.settings.notion_version)
+            self._notion = workspace.open(self.settings)
         return self._notion
 
     @property
@@ -130,22 +129,21 @@ class AppState:
         from palimpsest.store import open_store
 
         if self._queue is None:
+            from palimpsest import workspace
             from palimpsest.llm import Model
-            from palimpsest.notion.client import NotionClient
 
             def new_model():
                 return Model(settings=self.settings,
                              max_tokens=self.settings.max_tokens)
 
             def new_notion():
-                return NotionClient(self.settings.notion_token or "",
-                                    version=self.settings.notion_version)
+                return workspace.open(self.settings)
 
             self._queue = JobQueue(
                 store_factory=lambda: open_store(self.settings.database_url),
                 handlers={"ingest": ingest_runner(
                     self.settings, model_factory=new_model, archive=self.artifacts,
-                    notion_factory=new_notion if self.settings.has_notion else None,
+                    notion_factory=new_notion if self.settings.has_workspace else None,
                     on_change=self.refresh_index)},
                 workers=self.settings.workers,
             ).start()
@@ -310,7 +308,7 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
         """Pull Notion into the local mirror."""
         from palimpsest.notion import mirror
 
-        if not st.settings.has_notion:
+        if not st.settings.has_workspace:
             raise HTTPException(400, "NOTION_TOKEN is not set")
         result = mirror.sync(
             st.notion, st.store,
@@ -462,7 +460,7 @@ def create_app(state: AppState | None = None, **kwargs) -> Any:
         if not dry_run and not reviewer:
             raise HTTPException(422, "an applied patch must record who approved it: "
                                      "send {'reviewer': '...'}")
-        if not st.settings.has_notion:
+        if not st.settings.has_workspace:
             raise HTTPException(400, "NOTION_TOKEN is not set")
 
         result = apply_patch(st.notion, st.store, found, dry_run=dry_run,
