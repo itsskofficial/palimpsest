@@ -151,3 +151,65 @@ test("findPython either finds a usable interpreter or says nothing was found", (
   assert.equal(probe.status, 0, "findPython returned something that does not run");
   assert.equal(probe.stdout.trim(), "3");
 });
+
+// ---------------------------------------------------------------------------
+// the first-run failure nobody has ever seen
+// ---------------------------------------------------------------------------
+
+test("with no usable Python the error names the version and what to do", async () => {
+  // The single most likely way a first run fails, and the one nobody experiences while
+  // developing — every machine that builds this app has Python on it. Left to the raw
+  // failure it surfaces as `spawn ENOENT`, which reads like a bug in the app rather than
+  // a missing dependency, so the message has to carry the version, where to get it, and
+  // the Windows installer checkbox that is the actual cause more often than not.
+  const source = await readFile(join(APP, "backend.js"), "utf8");
+  const message = source.slice(source.indexOf("if (!python)"), source.indexOf("if (!python)") + 600);
+
+  assert.match(message, /needs Python/, "it must say Python is the problem");
+  assert.match(message, /MIN_PYTHON/, "and which version");
+  assert.match(message, /python\.org/, "and where to get it");
+  assert.match(message, /PATH/, "and the reason it is not found even when installed");
+});
+
+test("the minimum Python is one the package actually supports", async () => {
+  // The shell refuses anything older, so a mismatch here either blocks an interpreter
+  // that would have worked or accepts one that fails minutes later inside pip, with an
+  // error about a syntax feature rather than about the version.
+  const source = await readFile(join(APP, "backend.js"), "utf8");
+  const shell = source.match(/MIN_PYTHON = \[(\d+), (\d+)\]/);
+  assert.ok(shell, "MIN_PYTHON is not declared as a pair");
+
+  const pyproject = await readFile(join(REPO, "pyproject.toml"), "utf8");
+  const declared = pyproject.match(/requires-python\s*=\s*"[^0-9]*(\d+)\.(\d+)/);
+  assert.ok(declared, "pyproject does not declare requires-python");
+
+  assert.equal(`${shell[1]}.${shell[2]}`, `${declared[1]}.${declared[2]}`,
+               "clients/desktop/backend.js and pyproject.toml disagree on the minimum");
+});
+
+test("the extras the shell installs are extras the package defines", async () => {
+  // A typo here fails at `pip install` on a stranger's first run, several minutes in,
+  // with pip's own message about an unknown extra.
+  const source = await readFile(join(APP, "backend.js"), "utf8");
+  const extras = source.match(/EXTRAS = "\[([^\]]+)\]"/);
+  assert.ok(extras, "EXTRAS is not declared");
+
+  const pyproject = await readFile(join(REPO, "pyproject.toml"), "utf8");
+  const block = pyproject.slice(pyproject.indexOf("[project.optional-dependencies]"));
+  for (const extra of extras[1].split(",").map((s) => s.trim())) {
+    // `\\s` because this is a template literal: a single backslash there is swallowed,
+    // and the regex silently becomes `^anthropics*=`, which matches nothing.
+    assert.ok(new RegExp(`^${extra}\\s*=`, "m").test(block),
+              `the shell installs [${extra}], which pyproject does not define`);
+  }
+});
+
+test("the shell installs the distribution that exists on PyPI", async () => {
+  // `palimpsest` is a different project. Getting this wrong installs somebody else's
+  // package into the app's virtualenv and then fails on an import.
+  const source = await readFile(join(APP, "backend.js"), "utf8");
+  assert.match(source, /PACKAGE = "palimpsest-notion"/);
+
+  const pyproject = await readFile(join(REPO, "pyproject.toml"), "utf8");
+  assert.match(pyproject, /^name = "palimpsest-notion"$/m);
+});
