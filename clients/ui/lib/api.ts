@@ -136,9 +136,17 @@ export type ActivityEntry = {
   pages: string[];
 };
 
+/** What `palimpsest demo` is offering, if this is a demo vault at all. */
+export type DemoState = {
+  demo: boolean;
+  vault: string | null;
+  prompts: { label: string; text: string; why: string }[];
+};
+
 export const api = {
   status: () => request<any>("/v1/status"),
   setupState: () => request<SetupState>("/v1/setup/state"),
+  demo: () => request<DemoState>("/v1/demo"),
 
   validate: (provider: string, token: string) =>
     post<{ ok: boolean; detail?: string; error?: string; username?: string }>(

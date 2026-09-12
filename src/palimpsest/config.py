@@ -843,7 +843,15 @@ class Settings:
     def problems(self) -> list[str]:
         """Deployment mistakes that are legal but probably wrong."""
         out: list[str] = []
-        if not self.has_notion:
+        # These used to name Notion unconditionally, which on a markdown vault
+        # produced "nothing can be mirrored or applied" immediately after it had
+        # mirrored eight pages. A warning that is visibly false is worse than no
+        # warning: it teaches the reader to skip the ones that are true.
+        if self.backend == "markdown":
+            if not self.vault_path:
+                out.append("PALIMPSEST_VAULT is not set — there is nowhere to read "
+                           "or write")
+        elif not self.has_notion:
             out.append("NOTION_TOKEN is not set — nothing can be mirrored or applied")
         if not self.has_model:
             out.append("no model is configured — extraction and classification are off "
@@ -869,9 +877,15 @@ class Settings:
             tail = ("contradictions are recorded beside the line they argue with, never "
                     "resolved" if self.autonomy == "everything"
                     else "contradictions still wait for you")
+            where = "your vault" if self.backend == "markdown" else "Notion"
             out.append(f"apply=on and autonomy={self.autonomy}: {tiers}-risk relations "
-                       f"are written to Notion without review — {tail}")
-        if self.artifact_url.startswith("file://") and self.environment != "local":
+                       f"are written to {where} without review — {tail}")
+        # `demo` is as local as `local`. The warning is about container filesystems
+        # on a redeploy, which is not a thing that happens to somebody trying the
+        # tool on their laptop -- and a false alarm in the first thirty seconds
+        # teaches people to ignore the real ones.
+        if (self.artifact_url.startswith("file://")
+                and self.environment not in ("local", "demo")):
             out.append(f"archive goes to a local path but PALIMPSEST_ENV={self.environment}; "
                        "a container filesystem does not survive a redeploy — use s3:// or "
                        "supabase://, or your citations stop resolving")

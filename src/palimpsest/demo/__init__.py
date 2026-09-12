@@ -149,6 +149,20 @@ def settings_for(vault: str | Path, *, database_url: str | None = None) -> Any:
         # A demo has no second workspace to write a ledger into, and the Activity tab
         # reads the local store anyway.
         journal=False,
+        # Hermetic, and this part is not a detail.
+        #
+        # `Settings.load()` reads the config file, which on a machine that has been
+        # set up holds a real Telegram token and real tracing keys. Inheriting those
+        # meant `palimpsest demo` started the user's actual bot -- so a message sent
+        # to it from a phone would be answered by the demo, against the sample vault
+        # -- and shipped every demo call to their Langfuse project. Neither is what
+        # anybody means by "try it out".
+        telegram_token=None,
+        telegram_allowed_chats=(),
+        # Notion is unreachable from here by construction, since the backend is a
+        # vault; clearing the token as well means a demo cannot read one either.
+        notion_token=None,
+        notion_root_pages=(),
         environment="demo",
     )
 

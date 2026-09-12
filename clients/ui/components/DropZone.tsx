@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
+import { DemoPrompts } from "./DemoPrompts";
 
 /**
  * The surface you throw things at.
@@ -178,6 +179,8 @@ export function DropZone({ onCaptured }: { onCaptured: () => void }) {
           </motion.p>
         )}
       </AnimatePresence>
+
+      <DemoPrompts onPick={setText} />
     </section>
   );
 }

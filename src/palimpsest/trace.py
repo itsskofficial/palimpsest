@@ -58,6 +58,14 @@ def configure(settings: Any = None) -> bool:
         return _client is not None
     _configured = True
 
+    # An explicit off switch, because "unset the keys" is not always available to the
+    # caller. `palimpsest demo` is the case that forced it: it inherits the config file
+    # of whoever is running it, and shipping somebody's trial run to their real Langfuse
+    # project is not a thing a demo gets to do quietly.
+    if os.environ.get("PALIMPSEST_TRACE", "").strip().lower() in ("0", "off", "false"):
+        log.debug("tracing disabled by PALIMPSEST_TRACE")
+        return False
+
     public = os.environ.get("LANGFUSE_PUBLIC_KEY")
     secret = os.environ.get("LANGFUSE_SECRET_KEY")
     if not (public and secret):

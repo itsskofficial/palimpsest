@@ -440,9 +440,16 @@ def cmd_demo(args) -> int:
     The whole product against a sample vault: same mirror, same retrieval, same
     classifier, same planner, same one write door, same undo. Only the storage changes.
     """
+    import os
+
     from palimpsest import demo, serve, workspace
     from palimpsest.notion import mirror
     from palimpsest.store import open_store
+
+    # Before anything reads the environment. `Settings` can be replaced field by field,
+    # but tracing configures itself from `os.environ` at first use, and a demo must not
+    # ship somebody's trial run to their own Langfuse project.
+    os.environ["PALIMPSEST_TRACE"] = "0"
 
     vault = demo.install(args.dir or demo.default_home(), force=args.reset)
     settings = demo.settings_for(vault)

@@ -175,6 +175,35 @@ def _indent_of(line: str) -> int:
     return spaces // _INDENT
 
 
+def _starts_a_block(text: str) -> bool:
+    """Whether this line begins something other than more of the paragraph above."""
+    return bool(_HEADING.match(text) or _BULLET.match(text) or _NUMBER.match(text)
+                or _TODO.match(text) or _IMAGE.match(text) or _DIVIDER.match(text)
+                or _FENCE.match(text) or text.startswith(">"))
+
+
+def _prose_runs(lines: list[str]) -> list[dict]:
+    """Turn a callout's body lines into blocks, joining wrapped prose."""
+    out: list[dict] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if run:
+            out.append(_body("paragraph", "\n".join(run)))
+            run.clear()
+
+    for line in lines:
+        if not line:
+            flush()
+        elif _starts_a_block(line):
+            flush()
+            out.append(_line_to_block(line))
+        else:
+            run.append(line)
+    flush()
+    return out
+
+
 def _line_to_block(text: str) -> dict:
     """One already-dedented line to one block."""
     todo = _TODO.match(text)
@@ -255,13 +284,39 @@ def to_blocks(markdown: str) -> list[dict]:
                               icon={"type": "emoji", "emoji": icon},
                               color="gray_background")
             place(indent, block)
-            # Continuation lines (`> more text`) become children of the callout.
+            # Continuation lines (`> more text`) become children of the callout, with
+            # wrapped prose joined the same way it is joined outside one.
             index += 1
+            inner_lines: list[str] = []
             while index < len(lines) and lines[index].strip().startswith(">"):
-                inner = lines[index].strip()[1:].strip()
-                if inner:
-                    place(indent + 1, _line_to_block(inner))
+                inner_lines.append(lines[index].strip()[1:].strip())
                 index += 1
+            for child in _prose_runs(inner_lines):
+                place(indent + 1, child)
+            continue
+
+        # A run of consecutive plain lines is *one* paragraph, which is what markdown
+        # says and what anybody writing in an editor with a wrap column assumes.
+        #
+        # Treating each line as its own block looked harmless and was not. A vault
+        # written by hand is full of soft-wrapped prose, so on first sync every sentence
+        # fragment became a separate block: separate ids, separate retrieval candidates,
+        # separate things for the classifier to anchor a footnote to. And a round trip
+        # inserted a blank line at every wrap point, so the tool rewrote the file it had
+        # just read.
+        if _line_to_block(text)["type"] == "paragraph" and not _IMAGE.match(text):
+            run = [text]
+            look = index + 1
+            while look < len(lines):
+                nxt = lines[look].strip()
+                if not nxt or _indent_of(lines[look]) != indent:
+                    break
+                if _starts_a_block(nxt):
+                    break
+                run.append(nxt)
+                look += 1
+            place(indent, _body("paragraph", "\n".join(run)))
+            index = look
             continue
 
         place(indent, _line_to_block(text))
@@ -289,6 +344,19 @@ def _prune(blocks: list[dict]) -> None:
 _TIGHT = frozenset({"bulleted_list_item", "numbered_list_item", "to_do"})
 
 
+def _is_table_row(text: str) -> bool:
+    """Whether this paragraph is really a row of a markdown table.
+
+    A vault has no databases, so the activity ledger is a table and each row arrives as
+    its own paragraph block. Separated by blank lines the way paragraphs normally are,
+    those rows stop being a table at all -- every renderer shows twelve pipe-delimited
+    sentences instead. Detecting the shape is unpleasant, and the alternative is a
+    `table` block type that only this one feature would ever use.
+    """
+    stripped = text.strip()
+    return len(stripped) > 1 and stripped.startswith("|") and stripped.endswith("|")
+
+
 def to_markdown(blocks: list[dict] | None, depth: int = 0) -> str:
     """Render a nested block list back to markdown.
 
@@ -299,7 +367,7 @@ def to_markdown(blocks: list[dict] | None, depth: int = 0) -> str:
     """
     pad = " " * (_INDENT * depth)
     out: list[str] = []
-    previous = ""
+    previous = previous_kind = previous_text = ""
 
     for block in blocks or []:
         kind = block.get("type", "paragraph")
@@ -308,7 +376,10 @@ def to_markdown(blocks: list[dict] | None, depth: int = 0) -> str:
         text = rich_to_md(body.get("rich_text"))
         children = body.get("children") or []
 
-        if out and not (kind in _TIGHT and previous == kind):
+        tight = (kind in _TIGHT and previous == kind) or (
+            kind == "paragraph" == previous_kind and _is_table_row(text)
+            and _is_table_row(previous_text))
+        if out and not tight:
             out.append("")
 
         if kind.startswith("heading_") and kind[-1].isdigit():
@@ -352,12 +423,16 @@ def to_markdown(blocks: list[dict] | None, depth: int = 0) -> str:
             label = text or url
             out.append(f"{pad}[{label}]({url})" if url else f"{pad}{label}")
         else:
-            out.append(f"{pad}{text}" if text else "")
+            # A paragraph may hold the newlines of its original soft wrap; re-indent each
+            # line rather than emitting one very long one.
+            out.append("\n".join(f"{pad}{line}" for line in text.split("\n"))
+                       if text else "")
 
         if children:
             nested = to_markdown(children, depth + 1)
             if nested:
                 out.append(nested)
-        previous = kind
+        previous = previous_kind = kind
+        previous_text = text
 
     return "\n".join(line for line in out).strip("\n")

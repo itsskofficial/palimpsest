@@ -455,3 +455,53 @@ def test_what_the_planner_writes_survives_the_round_trip():
 
     assert len(blocks) == 1 and blocks[0]["type"] == "callout"
     assert to_markdown(blocks) == original
+
+
+def test_soft_wrapped_prose_is_one_paragraph_not_one_per_line():
+    """What anybody writing in an editor with a wrap column assumes, and what markdown
+    says.
+
+    Treating each line as its own block looked harmless and was not. A vault written by
+    hand is full of soft-wrapped prose, so on first sync every sentence fragment became a
+    separate block — separate id, separate retrieval candidate, separate thing for the
+    classifier to hang a footnote on. And the round trip inserted a blank line at every
+    wrap point, so the tool rewrote the file it had just read.
+    """
+    source = ("Gradient clipping bounds the size of a gradient update before the\n"
+              "optimiser applies it. It is the standard remedy for exploding\n"
+              "gradients in deep networks.")
+
+    blocks = to_blocks(source)
+
+    assert len(blocks) == 1 and blocks[0]["type"] == "paragraph"
+    assert to_markdown(blocks) == source
+
+
+def test_a_blank_line_still_starts_a_new_paragraph():
+    blocks = to_blocks("First thought,\ncontinued.\n\nSecond thought.")
+
+    assert [b["type"] for b in blocks] == ["paragraph", "paragraph"]
+    assert rich_to_md(blocks[0]["paragraph"]["rich_text"]) == "First thought,\ncontinued."
+
+
+def test_a_wrapped_line_that_starts_a_block_is_not_swallowed():
+    """The join must stop at anything that is not more prose, or a heading directly
+    under a paragraph disappears into it."""
+    blocks = to_blocks("Some prose.\n## A heading\n- a bullet\n> a quote")
+
+    assert [b["type"] for b in blocks] == [
+        "paragraph", "heading_2", "bulleted_list_item", "quote"]
+
+
+def test_a_callout_body_wraps_the_same_way():
+    """The bug that surfaced this: a wrapped callout gained a blank quote line per wrap,
+    so every sync rewrote the page."""
+    source = ("> [!abstract] Vaswani et al., 2017\n"
+              "> The paper that introduced the transformer. Replaces recurrence\n"
+              "> entirely with self-attention.")
+
+    blocks = to_blocks(source)
+
+    assert len(blocks) == 1 and blocks[0]["type"] == "callout"
+    assert len(blocks[0]["callout"]["children"]) == 1, "one paragraph, not two"
+    assert to_markdown(blocks) == source

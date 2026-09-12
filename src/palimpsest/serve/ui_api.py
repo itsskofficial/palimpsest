@@ -93,6 +93,27 @@ def register(app, st) -> None:
             "autonomy": s.autonomy,
         }
 
+    @app.get("/v1/demo", tags=["setup"])
+    def demo_state():
+        """Whether this is a demo vault, and what to suggest trying.
+
+        The suggestions matter more than they look. A visitor who has not read the
+        sample notes cannot invent a claim that lands on `contradicts` on purpose, so
+        without them the demo shows that *something* happens without showing the thing
+        worth seeing: which relation it picks, and why.
+        """
+        from palimpsest import demo
+
+        active = st.settings.backend == "markdown" and st.settings.environment == "demo"
+        return {
+            "demo": active,
+            "vault": st.settings.vault_path if active else None,
+            "prompts": [
+                {"label": p["label"], "text": p["text"], "why": p["why"]}
+                for p in demo.PROMPTS
+            ] if active else [],
+        }
+
     @app.get("/v1/setup/local", tags=["setup"])
     def setup_local():
         """Which local model runtimes are actually running, and what they have loaded.
