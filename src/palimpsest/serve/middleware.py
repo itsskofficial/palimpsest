@@ -24,6 +24,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import re
 import sys
 import time
 import uuid
@@ -138,6 +139,28 @@ def configure_logging(level: str = "info", json_output: bool = False) -> None:
     logging.getLogger("uvicorn.access").disabled = True
 
 
+#: Path segments that are ids rather than route structure. Every one of ours is
+#: `<prefix>_<hex>`, which is what makes a cheap fallback possible at all: the auth and
+#: error paths observe before Starlette has matched a route, so there is nothing to ask.
+_ID = re.compile(r"^[a-z]{2,4}_[0-9a-f]{8,}$")
+
+
+def _template(path: str) -> str:
+    """Replace id-shaped segments with a placeholder."""
+    parts = [("{id}" if _ID.match(part) else part) for part in path.split("/")]
+    return "/".join(parts)
+
+
+def _route_of(request, path: str) -> str:
+    """The matched route's template, or the best guess if nothing matched.
+
+    A 404 never matches a route, so it falls through to `_template` -- otherwise a
+    scanner walking random URLs creates a counter per URL it tried.
+    """
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or _template(path)
+
+
 def install(app, settings, metrics: Metrics) -> None:
     """Attach auth, request-id/logging, body limits and CORS to a FastAPI app."""
     from fastapi import Request
@@ -204,7 +227,8 @@ def install(app, settings, metrics: Metrics) -> None:
             # `compare_digest` rather than `==`: a plain comparison returns as soon as
             # two bytes differ, which leaks the prefix through response timing.
             if not token or not hmac.compare_digest(token, settings.api_key):
-                metrics.observe(request.method, path, 401, time.perf_counter() - start)
+                metrics.observe(request.method, _template(path), 401,
+                                time.perf_counter() - start)
                 log.warning(
                     "unauthorised request",
                     extra={"request_id": request_id, "method": request.method, "path": path,
@@ -222,7 +246,7 @@ def install(app, settings, metrics: Metrics) -> None:
             response = await call_next(request)
         except Exception:
             duration = time.perf_counter() - start
-            metrics.observe(request.method, path, 500, duration)
+            metrics.observe(request.method, _route_of(request, path), 500, duration)
             log.exception(
                 "unhandled error",
                 extra={"request_id": request_id, "method": request.method, "path": path,
@@ -235,7 +259,14 @@ def install(app, settings, metrics: Metrics) -> None:
             )
 
         duration = time.perf_counter() - start
-        metrics.observe(request.method, path, response.status_code, duration)
+        # The *route*, not the URL. `request.url.path` carries the ids, so
+        # `/v1/patches/pch_48075473/undo` became its own metric series -- a new one for
+        # every patch and every job, forever, in a process that runs for weeks. That is
+        # an unbounded set of counters and histogram buckets held in memory, and it put
+        # every patch and job id on `/metrics`, which stays open even when an API key is
+        # set. Starlette fills in the matched route during `call_next`.
+        metrics.observe(request.method, _route_of(request, path),
+                        response.status_code, duration)
         response.headers["X-Request-ID"] = request_id
         # Health checks fire every few seconds; logging them at info buries everything.
         level = logging.DEBUG if path in OPEN_PATHS else logging.INFO
