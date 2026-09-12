@@ -204,7 +204,10 @@ palimpsest undo <patch_id>           # revert exactly
 ```
 
 `palimpsest status` exits non-zero when it finds a problem, so it works as a health
-check in a script. `/healthz` deliberately touches nothing external — a liveness probe
+check in a script. A line marked `-` rather than `!` is the write posture — what the
+thing will do on its own — and does not count: it fires whenever writes are on at all,
+which is the configuration most people want, and a health check that always fails is one
+nobody reads. `/healthz` deliberately touches nothing external — a liveness probe
 that fails when Notion blips gets a healthy process killed. `/readyz` checks the
 database.
 

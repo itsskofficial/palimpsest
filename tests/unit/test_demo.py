@@ -153,12 +153,30 @@ def test_a_vault_with_nowhere_to_live_is_warned():
                for p in Settings(backend="markdown").problems())
 
 
-def test_the_autonomy_warning_names_where_writes_actually_go():
+def test_the_write_posture_names_where_writes_actually_go():
     vault = Settings(backend="markdown", vault_path="/tmp/v", apply=True, autonomy="full")
     notion = Settings(backend="notion", notion_token="ntn_x", apply=True, autonomy="full")
 
-    assert any("your vault" in p for p in vault.problems())
-    assert any("to Notion" in p for p in notion.problems())
+    assert any("your vault" in p for p in vault.posture())
+    assert any("to Notion" in p for p in notion.posture())
+
+
+def test_the_write_posture_is_not_counted_as_a_problem():
+    """`palimpsest status` is documented as a health check that exits non-zero when it
+    finds a problem. This line fires whenever writes are on at all -- the configuration
+    people arrive at on purpose -- so counting it meant a correctly set-up install
+    failed its own health check forever, which is how a health check stops being read."""
+    writing = Settings(notion_token="ntn_x", anthropic_api_key="sk-x",
+                       apply=True, autonomy="full")
+
+    assert writing.posture(), "it still has to be said"
+    assert not any("autonomy=full" in p for p in writing.problems())
+
+
+def test_propose_only_has_no_posture_to_declare():
+    """Nothing is written, so there is nothing to warn anybody about."""
+    assert Settings(notion_token="ntn_x", apply=False).posture() == []
+    assert Settings(notion_token="ntn_x", apply=True, autonomy="none").posture() == []
 
 
 def test_a_local_demo_is_not_warned_about_container_filesystems(configured):

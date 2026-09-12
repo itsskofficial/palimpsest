@@ -102,6 +102,10 @@ def register(app, st) -> None:
                 "tracing": bool(s.extras.get("langfuse")) or _has_langfuse(),
             },
             "problems": s.problems(),
+            # What it will do on its own, kept apart from what is wrong with it.
+            # The Settings screen has a control for this; the onboarding list
+            # should not be telling somebody to fix the thing they just chose.
+            "posture": s.posture(),
             "apply": s.apply,
             "autonomy": s.autonomy,
         }

@@ -123,12 +123,17 @@ class Store(Protocol):
     def close(self) -> None: ...
 
 
-def open_store(url: str = "sqlite:///palimpsest.db") -> Store:
+def open_store(url: str = "sqlite:///palimpsest.db", **kw: Any) -> Store:
     """Open a store from a URL.
 
     `sqlite:///path/to.db` (or `sqlite://:memory:`) and `postgresql://user:pass@host/db`
     are understood. Supabase connection strings are Postgres URLs, so they work
     unchanged. Credentials come from the URL or the environment, never a source file.
+
+    `**kw` reaches the Postgres store, which is where the options are -- `retries` above
+    all. Retrying the first connect with backoff is right for a container that starts
+    before its database and wrong for a diagnostic: `palimpsest db check` against
+    something that is down should say so in a second, not in twenty.
     """
     if url.startswith("sqlite"):
         from palimpsest.store.sqlite import SQLiteStore
@@ -150,5 +155,5 @@ def open_store(url: str = "sqlite:///palimpsest.db") -> Store:
     if url.startswith(("postgres://", "postgresql://")):
         from palimpsest.store.postgres import PostgresStore
 
-        return PostgresStore(url)
+        return PostgresStore(url, **kw)
     raise ValueError(f"unrecognised store URL {url!r}; use sqlite:// or postgresql://")

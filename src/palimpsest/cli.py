@@ -570,6 +570,11 @@ def cmd_status(args) -> int:
     print("\nchecks")
     for p in problems:
         print(f"  ! {p}")
+    # Printed, never counted. This says what the thing will do on its own, which is
+    # worth saying out loud every time -- but it is a deliberate setting, not a fault,
+    # and `status` is documented as a health check that exits non-zero on a problem.
+    for p in settings.posture():
+        print(f"  - {p}")
     if not problems:
         print("  all good")
     store.close()
@@ -598,7 +603,9 @@ def cmd_db(args) -> int:
 
         print(f"database  {redact(url, 'url')}")
         try:
-            store = open_store(url)
+            # One attempt. This command exists to answer "is it up", and a health check
+            # that takes twenty seconds of backoff to say "no" is one nobody waits for.
+            store = open_store(url, retries=1)
         except Exception as e:
             print(f"  UNREACHABLE: {type(e).__name__}: {e}")
             return 1

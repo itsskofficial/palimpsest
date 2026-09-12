@@ -348,7 +348,7 @@ class Bot:
         store = self.store_factory()
         try:
             stats = store.stats()
-            problems = self.settings.problems()
+            problems = self.settings.problems() + self.settings.posture()
         finally:
             store.close()
 

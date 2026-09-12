@@ -283,3 +283,239 @@ def test_demo_checks_for_the_web_server_before_doing_any_work(tmp_path, monkeypa
     assert "palimpsest-notion[serve]" in message, "must name the real distribution"
     assert "--no-serve" in message, "must offer the way forward"
     assert not (tmp_path / "v").exists(), "it must fail before doing any work"
+
+
+# ---------------------------------------------------------------------------
+# the commands that run with nothing configured
+#
+# These are what somebody types before they have given the tool a key, and what a
+# deployment runs to find out whether it is healthy. Each has to work, and each has to
+# say something useful when the answer is "nothing here yet".
+# ---------------------------------------------------------------------------
+
+
+def _run(argv, db=None):
+    """`cli.main`, with the database pointed somewhere disposable."""
+    return cli.main([*argv, *(["--db", db] if db else [])])
+
+
+def test_status_passes_a_healthy_install_and_still_says_what_it_will_do(db, capsys,
+                                                                       monkeypatch):
+    """`palimpsest status` is documented as a health check that exits non-zero when it
+    finds a problem. The write-posture line fires whenever writes are on at all -- the
+    configuration people arrive at on purpose -- so counting it meant a correct install
+    failed its own health check forever."""
+    monkeypatch.setenv("NOTION_TOKEN", "ntn_x")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("PALIMPSEST_NOTION_ROOTS", "abc123")
+    monkeypatch.setenv("PALIMPSEST_APPLY", "1")
+    monkeypatch.setenv("PALIMPSEST_AUTONOMY", "low")
+    # Measured, and it passed. Write access to an unmeasured model is a real warning and
+    # stays one -- this test is about the line that is not.
+    from palimpsest.evals import report
+    from palimpsest.store.base import open_store
+
+    store = open_store(db)
+    report.record(store, "component",
+                  {"weighted_f1": 0.95, "contradiction_recall": 1.0, "n": 20,
+                   "passed": True}, model="anthropic/claude-opus-5")
+    store.close()
+
+    code = _run(["status"], db)
+
+    out = capsys.readouterr().out
+    assert "apply=on and autonomy=low" in out, "it still has to be said"
+    assert code == 0, out
+
+
+def test_status_fails_when_something_is_actually_missing(db, capsys, monkeypatch):
+    monkeypatch.delenv("NOTION_TOKEN", raising=False)
+
+    code = _run(["status"], db)
+
+    assert code == 1
+    assert "NOTION_TOKEN" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# db
+# ---------------------------------------------------------------------------
+
+
+def test_db_sql_prints_a_schema_for_either_dialect(capsys):
+    assert cli.main(["db", "sql", "--dialect", "sqlite"]) == 0
+    sqlite = capsys.readouterr().out
+    assert cli.main(["db", "sql", "--dialect", "postgres"]) == 0
+    postgres = capsys.readouterr().out
+
+    assert "CREATE TABLE" in sqlite and "CREATE TABLE" in postgres
+    assert "AUTOINCREMENT" in sqlite, "that is the SQLite spelling"
+    assert "BIGSERIAL" in postgres, "and that is the Postgres one"
+
+
+def test_db_sql_can_be_written_to_a_file(tmp_path):
+    out = tmp_path / "schema.sql"
+
+    assert cli.main(["db", "sql", "--dialect", "sqlite", "--out", str(out)]) == 0
+    assert "CREATE TABLE" in out.read_text(encoding="utf-8")
+
+
+def test_db_check_on_a_fresh_store_reports_no_pending_migrations(db, capsys):
+    """Exit 2 means "reachable, but the schema is behind" -- a deploy has to tell that
+    apart from "cannot connect", because only one of them is fixed by running migrate."""
+    code = cli.main(["db", "check", "--url", db])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "pending   none" in out
+    assert "ping" in out
+
+
+def test_db_check_on_an_unreachable_database_exits_one_rather_than_raising(capsys):
+    code = cli.main(["db", "check", "--url",
+                     "postgresql://nobody@127.0.0.1:1/does_not_exist"])
+
+    assert code == 1
+    assert "UNREACHABLE" in capsys.readouterr().out
+
+
+def test_db_check_redacts_the_password_it_prints(capsys):
+    """This output is the first thing somebody pastes into an issue."""
+    cli.main(["db", "check", "--url",
+              "postgresql://user:hunter2@127.0.0.1:1/palimpsest"])
+
+    assert "hunter2" not in capsys.readouterr().out
+
+
+def test_db_migrate_is_idempotent(db, capsys):
+    assert cli.main(["db", "migrate", "--url", db]) == 0
+    first = capsys.readouterr().out
+    assert cli.main(["db", "migrate", "--url", db]) == 0
+    second = capsys.readouterr().out
+
+    assert "applied" in first
+    assert "nothing to do" in second
+
+
+def test_db_reset_refuses_without_saying_you_mean_it(db):
+    """It drops the mirror and the whole patch ledger. A typo must not be enough."""
+    with pytest.raises(SystemExit) as caught:
+        cli.main(["db", "reset", "--url", db])
+
+    assert "--yes" in str(caught.value)
+
+
+def test_db_reset_with_yes_empties_the_store(db, capsys):
+    from palimpsest.store.base import open_store
+
+    store = open_store(db)
+    store.put_pages([{"page_id": "pg_1", "title": "P", "last_edited": "x"}])
+    store.close()
+
+    assert cli.main(["db", "reset", "--yes", "--url", db]) == 0
+    assert "truncated" in capsys.readouterr().out
+
+    store = open_store(db)
+    assert store.get_pages() == []
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# history and provenance — the "where did this come from" half
+# ---------------------------------------------------------------------------
+
+
+def test_history_on_a_page_that_is_not_mirrored_says_so(db):
+    with pytest.raises(SystemExit, match="no page"):
+        _run(["history", "pg_nope"], db)
+
+
+def test_history_on_a_page_with_no_edits_says_that_rather_than_nothing(db, capsys):
+    """An empty list and a page palimpsest has never touched look identical otherwise,
+    and the difference is the whole question being asked."""
+    from palimpsest.store.base import open_store
+
+    store = open_store(db)
+    store.put_pages([{"page_id": "pg_1", "title": "Gradient clipping",
+                      "last_edited": "x"}])
+    store.close()
+
+    assert _run(["history", "pg_1"], db) == 0
+    out = capsys.readouterr().out
+    assert "Gradient clipping" in out
+    assert "has not edited this page" in out
+
+
+def test_provenance_for_a_block_nobody_wrote_says_so(db, capsys):
+    assert _run(["provenance", "bk_nope"], db) == 0
+    assert "no provenance" in capsys.readouterr().out
+
+
+def test_provenance_names_the_source_and_where_in_it(db, capsys):
+    """This is the audit trail: a sentence, six months later, and the question of where
+    it came from."""
+    from palimpsest.store.base import open_store
+    from palimpsest.types import Source
+
+    store = open_store(db)
+    store.put_pages([{"page_id": "pg_1", "title": "P", "last_edited": "x"}])
+    store.put_blocks([{"block_id": "bk_1", "page_id": "pg_1", "type": "paragraph",
+                       "text": "clipping is the default", "position": 0}])
+    store.put_source(Source(source_id="src_1", kind="web", title="A post on clipping",
+                            url="https://example.com/p", text="x"))
+    store.put_provenance([{"block_id": "bk_1", "page_id": "pg_1", "source_id": "src_1",
+                           "relation": "refines",
+                           "anchor": {"locator": "Introduction",
+                                      "url": "https://example.com/p#intro"}}])
+    store.close()
+
+    assert _run(["provenance", "bk_1"], db) == 0
+    out = capsys.readouterr().out
+    assert "A post on clipping" in out
+    assert "refines" in out
+    assert "Introduction" in out
+    assert "https://example.com/p#intro" in out
+
+
+# ---------------------------------------------------------------------------
+# the commands that need a model, run without one
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_without_a_model_says_which_keys_would_work(db, monkeypatch):
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
+                 "PALIMPSEST_MODEL_BASE_URL", "PALIMPSEST_MODEL_PROVIDER",
+                 "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(SystemExit) as caught:
+        _run(["ingest", "text:a thought"], db)
+
+    assert "API_KEY" in str(caught.value)
+
+
+def test_sweep_names_the_kinds_it_does_have(db, capsys):
+    """Refused at the parser, so the message lists the four rather than just saying no."""
+    with pytest.raises(SystemExit):
+        _run(["sweep", "vibes"], db)
+
+    err = capsys.readouterr().err
+    for kind in ("duplicates", "contradictions", "stale", "questions"):
+        assert kind in err
+
+
+def test_sweep_stale_runs_with_no_key_at_all(db, capsys):
+    """Three of the four sweeps are arithmetic over the mirror. They are the day-one
+    output, before anybody has given the tool a credential."""
+    assert _run(["sweep", "stale"], db) == 0
+    assert "stale" in capsys.readouterr().out
+
+
+def test_sweep_questions_runs_with_no_key_either(db, capsys):
+    assert _run(["sweep", "questions"], db) == 0
+    assert "open_questions" in capsys.readouterr().out
+
+
+def test_undo_on_a_patch_that_does_not_exist_says_so(db):
+    with pytest.raises(SystemExit):
+        _run(["undo", "pch_nope"], db)

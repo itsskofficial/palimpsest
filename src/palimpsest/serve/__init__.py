@@ -64,6 +64,8 @@ def run(host: str | None = None, port: int | None = None, db: str | None = None,
     print(f"  mode:   {mode}, autonomy={settings.autonomy}")
     for problem in settings.problems():
         print(f"  !       {problem}")
+    for line in settings.posture():
+        print(f"  -       {line}")
     print()
 
     uvicorn.run(create_app(state), host=settings.host, port=settings.port,

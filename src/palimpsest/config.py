@@ -928,14 +928,6 @@ class Settings:
         if self.transcribe_provider and not self.transcriber:
             out.append(f"PALIMPSEST_TRANSCRIBE={self.transcribe_provider} but its key is "
                        "not set — recordings will fail rather than fall back")
-        if self.apply and self.autonomy != "none":
-            tiers = ", ".join(sorted(AUTONOMY_LEVELS[self.autonomy]))
-            tail = ("contradictions are recorded beside the line they argue with, never "
-                    "resolved" if self.autonomy == "everything"
-                    else "contradictions still wait for you")
-            where = "your vault" if self.backend == "markdown" else "Notion"
-            out.append(f"apply=on and autonomy={self.autonomy}: {tiers}-risk relations "
-                       f"are written to {where} without review — {tail}")
         # `demo` is as local as `local`. The warning is about container filesystems
         # on a redeploy, which is not a thing that happens to somebody trying the
         # tool on their laptop -- and a false alarm in the first thirty seconds
@@ -948,6 +940,29 @@ class Settings:
         if not self.is_local_only and not self.api_key:
             out.append("binding non-locally with no PALIMPSEST_API_KEY")
         return out
+
+    def posture(self) -> list[str]:
+        """What this configuration will do on its own — said plainly, once.
+
+        Separate from `problems()` because it is not one. `palimpsest status` is
+        documented as a health check that exits non-zero when something is wrong, and
+        this line fires whenever writes are on at all -- which is the configuration
+        somebody arrives at on purpose, and usually the one they want. Counted as a
+        problem it made the exit code useless: a correctly set-up install failed its own
+        health check forever, which is how a health check stops being read.
+
+        It is still printed everywhere it was printed before. Saying out loud that the
+        thing can now edit your notes without asking is the entire point of it.
+        """
+        if not self.apply or self.autonomy == "none":
+            return []
+        tiers = ", ".join(sorted(AUTONOMY_LEVELS[self.autonomy]))
+        tail = ("contradictions are recorded beside the line they argue with, never "
+                "resolved" if self.autonomy == "everything"
+                else "contradictions still wait for you")
+        where = "your vault" if self.backend == "markdown" else "Notion"
+        return [f"apply=on and autonomy={self.autonomy}: {tiers}-risk relations are "
+                f"written to {where} without review — {tail}"]
 
 
 def load(**overrides) -> Settings:
