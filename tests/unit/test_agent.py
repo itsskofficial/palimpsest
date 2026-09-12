@@ -13,6 +13,8 @@ point: if this fake ever has to grow a vendor shape again, an abstraction has le
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from palimpsest.agent import ToolContext, build_registry
@@ -374,3 +376,200 @@ def test_a_tool_error_is_marked_as_one_in_the_history(ctx):
     tool_turn = next(t for t in ctx._model.conversations[0].turns if t["role"] == "tool")
     assert tool_turn["errors"] == [True]
     assert "error" in tool_turn["content"][0]
+
+
+# ---------------------------------------------------------------------------
+# the read-only tools
+# ---------------------------------------------------------------------------
+#
+# The agent's answers are only worth anything if they come from the mirror, so what these
+# check is mostly *grounding*: that each tool returns what is actually in the store, and
+# that a miss comes back as a result the model can reason about rather than an exception
+# that ends the turn. A tool that raises takes the whole conversation down; a tool that
+# returns `{"error": ...}` lets the model say "there is no such page" and carry on.
+
+
+def _call(ctx, name: str, **arguments):
+    tool = next(t for t in build_registry(ctx) if t.name == name)
+    return tool.handler(**arguments)
+
+
+def test_get_provenance_answers_which_source_wrote_a_sentence(ctx):
+    ctx.store.put_pages([{"page_id": "pg_1", "title": "P", "last_edited": "x"}])
+    ctx.store.put_provenance([{"block_id": "bk_1", "claim_id": "clm_1",
+                               "source_id": "src_1", "relation": "new",
+                               "patch_id": "pch_1"}])
+
+    out = _call(ctx, "get_provenance", block_id="bk_1")
+
+    assert out["provenance"][0]["source_id"] == "src_1"
+    assert out["note"] is None
+
+
+def test_a_block_palimpsest_did_not_write_says_so_rather_than_looking_broken(ctx):
+    """Most blocks in a real workspace were typed by a person. "No provenance" is the
+    normal answer, and without the note the model reports it as a failure."""
+    out = _call(ctx, "get_provenance", block_id="bk_typed_by_hand")
+
+    assert out["provenance"] == []
+    assert "not written by palimpsest" in out["note"]
+
+
+def test_get_patch_summarises_without_dumping_the_inverses(ctx):
+    """The inverses are large, and every token of them is paid for on a call that only
+    needs to explain what a patch would do."""
+    op = Operation(kind=OpKind.APPEND_BLOCK, target="pg_1", relation=Relation.NEW,
+                   payload={"text": "a claim", "rationale": "nothing covers this"})
+    op.inverse = {"kind": "archive_blocks", "target": "pg_1",
+                  "payload": {"block_ids": ["bk_x"] * 50}}
+    patch = Patch(patch_id=new_id("pch_"), source_id="s", operations=[op])
+    ctx.store.put_patch(patch)
+
+    out = _call(ctx, "get_patch", patch_id=patch.patch_id)
+
+    assert out["by_relation"] == {"new": 1}
+    assert out["operations"][0]["why"] == "nothing covers this"
+    assert "inverse" not in json.dumps(out), "inverses are noise on this call"
+
+
+def test_get_patch_for_something_that_is_not_there_is_an_error_not_a_crash(ctx):
+    assert "error" in _call(ctx, "get_patch", patch_id="pch_nothing")
+
+
+def test_list_pending_shows_both_kinds_of_waiting(ctx):
+    """An approval and a proposed patch are different states — one is a change held at
+    the gate, the other was never gated at all — and the agent has to see both or it
+    tells you nothing is waiting while something is."""
+    ctx.store.put_approval({"approval_id": "apr_1", "patch_id": "pch_1",
+                            "operation_ids": ["op_a"], "status": "pending",
+                            "summary": "one change"})
+    ctx.store.put_patch(Patch(patch_id="pch_2", source_id="s", operations=[
+        Operation(kind=OpKind.APPEND_BLOCK, target="pg_1", relation=Relation.NEW,
+                  payload={"text": "x"})]))
+
+    out = _call(ctx, "list_pending")
+
+    assert out["approvals"][0]["approval_id"] == "apr_1"
+    assert out["approvals"][0]["operations"] == 1
+    assert out["proposed_patches"][0]["patch_id"] == "pch_2"
+
+
+def test_check_job_reports_a_finished_capture(ctx):
+    ctx.store.put_job({"job_id": "job_1", "kind": "ingest", "spec": "x",
+                       "status": "done",
+                       "result": {"claims": 4, "patch": {"patch_id": "pch_9"},
+                                  "auto_applied": {"applied": 3,
+                                                   "approval_id": "apr_2"}}})
+
+    out = _call(ctx, "check_job", job_id="job_1")
+
+    assert out["status"] == "done"
+    assert out["claims"] == 4
+    assert out["patch_id"] == "pch_9"
+    assert out["applied"] == 3
+    assert out["approval_id"] == "apr_2"
+
+
+def test_check_job_on_a_job_that_never_existed_is_an_error(ctx):
+    assert "error" in _call(ctx, "check_job", job_id="job_nothing")
+
+
+def test_capture_queues_rather_than_ingesting_inline(ctx):
+    """Ingestion takes minutes and a conversational turn does not. Doing it inline would
+    hold the turn open past every timeout between here and the user."""
+    out = _call(ctx, "capture_source", spec="https://example.com/a")
+
+    assert out["status"] == "queued"
+    assert ctx.store.get_job(out["job_id"]) is not None
+    assert "background" in out["note"]
+
+
+# ---------------------------------------------------------------------------
+# memory
+# ---------------------------------------------------------------------------
+
+
+def test_remembering_a_fact_makes_it_recallable(ctx):
+    _call(ctx, "remember", fact="prefers terse answers", key="tone")
+
+    assert _call(ctx, "recall")["memories"][0]["value"] == "prefers terse answers"
+
+
+def test_recall_filters_on_the_key_as_well_as_the_value(ctx):
+    """The agent searches its own memory by whatever it half-remembers, which is as
+    often the label as the content."""
+    _call(ctx, "remember", fact="prefers terse answers", key="tone")
+    _call(ctx, "remember", fact="works on transformers", key="topic")
+
+    assert len(_call(ctx, "recall", query="tone")["memories"]) == 1
+    assert len(_call(ctx, "recall", query="transformers")["memories"]) == 1
+    assert len(_call(ctx, "recall", query="nothing at all")["memories"]) == 0
+
+
+def test_remembering_the_same_key_twice_replaces_rather_than_accumulates(ctx):
+    """Otherwise a preference that changed leaves both versions in memory and the agent
+    acts on whichever it reads first."""
+    _call(ctx, "remember", fact="terse", key="tone")
+    _call(ctx, "remember", fact="detailed", key="tone")
+
+    memories = _call(ctx, "recall", query="tone")["memories"]
+    assert len(memories) == 1
+    assert memories[0]["value"] == "detailed"
+
+
+# ---------------------------------------------------------------------------
+# the tools that need a workspace
+# ---------------------------------------------------------------------------
+
+
+def test_sync_without_a_workspace_is_an_error_rather_than_a_traceback(ctx):
+    """Unconfigured is a normal state — the agent is usable before Notion is connected —
+    so asking it to sync has to come back as something the model can explain."""
+    out = _call(ctx, "sync_mirror")
+
+    assert "error" in out
+
+
+def test_a_sweep_runs_against_the_mirror_with_no_model(ctx):
+    """The day-one property, reached through the agent: the duplicate sweep needs no key
+    and no network, so it works on a machine that has only just been set up."""
+    text = "Attention divides the logits by the square root of the key dimension."
+    ctx.store.put_pages([{"page_id": p, "title": p, "last_edited": "x"}
+                         for p in ("pg_a", "pg_b")])
+    ctx.store.put_blocks([
+        {"block_id": "bk_a", "page_id": "pg_a", "type": "paragraph", "text": text,
+         "position": 0},
+        {"block_id": "bk_b", "page_id": "pg_b", "type": "paragraph", "text": text,
+         "position": 0}])
+    ctx.refresh_index()
+
+    out = _call(ctx, "run_sweep", kind="duplicates")
+
+    assert out.get("findings") or out.get("count"), out
+
+
+def test_an_unknown_sweep_names_the_ones_that_exist(ctx):
+    out = _call(ctx, "run_sweep", kind="vibes")
+
+    assert "error" in out
+    assert "duplicates" in json.dumps(out)
+
+
+def test_rejecting_a_patch_records_the_reason(ctx):
+    """"Why did you not apply this" is a question the ledger has to answer, and the
+    answer is worthless without the reason."""
+    patch = Patch(patch_id=new_id("pch_"), source_id="s", operations=[
+        Operation(kind=OpKind.APPEND_BLOCK, target="pg_1", relation=Relation.NEW,
+                  payload={"text": "x"})])
+    ctx.store.put_patch(patch)
+
+    out = _call(ctx, "reject_patch", patch_id=patch.patch_id,
+                reason="already covered on the optimisers page")
+
+    assert out.get("status") == "rejected" or out.get("rejected")
+    stored = ctx.store.list_patches(status="rejected")
+    assert [p["patch_id"] for p in stored] == [patch.patch_id]
+
+
+def test_undo_on_a_patch_that_was_never_applied_says_so(ctx):
+    assert "error" in _call(ctx, "undo_patch", patch_id="pch_nothing")
