@@ -556,14 +556,16 @@ class MarkdownWorkspace:
     # with a markdown table — which is what a database view is for a reader anyway, and
     # it renders correctly in Obsidian and on GitHub.
 
-    def create_database(self, parent_page_id: str, title: str,
-                        properties: dict | None = None) -> dict:
+    def create_database(self, parent_page_id: str, title: str, properties: dict,
+                        icon: str | None = None,
+                        description: str | None = None) -> dict:
         with self._lock:
             columns = list((properties or {}).keys()) or ["Name"]
             header = "| " + " | ".join(columns) + " |"
             rule = "| " + " | ".join("---" for _ in columns) + " |"
-            page = self.create_page(parent_page_id, title,
-                                    children=to_blocks(f"{header}\n{rule}"))
+            intro = to_blocks(description) if description else []
+            page = self.create_page(parent_page_id, title, icon=icon,
+                                    children=intro + to_blocks(f"{header}\n{rule}"))
             database_id = page["id"]
             (self._meta / f"db-{database_id}.json").write_text(
                 json.dumps({"columns": columns, "title": title}), encoding="utf-8")

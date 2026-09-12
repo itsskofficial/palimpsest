@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from palimpsest.config import confidence_bar
 from palimpsest.types import (
     Claim,
     Judgement,
@@ -95,6 +96,15 @@ def _anchor_url(source: Source, claim: Claim) -> str | None:
     return source.url
 
 
+def _bar(judgement: Judgement, base: float) -> float:
+    """The confidence this judgement must clear, scaled by what it would do.
+
+    See `config.CONFIDENCE_BY_RISK`. The short version: a model that is honest about
+    uncertainty is least certain about the safest operation, so a single flat bar
+    rejected additive edits most often and strike-throughs least.
+    """
+    return confidence_bar(judgement.relation.risk, base)
+
 def plan(judgements: list[Judgement], claims: dict[str, Claim], source: Source,
          store, *, min_confidence: float = 0.75, footnotes: bool = True,
          default_parent: str | None = None,
@@ -129,7 +139,8 @@ def plan(judgements: list[Judgement], claims: dict[str, Claim], source: Source,
             # writing into the page if we believe it.
             ops = (_contradiction_ops(judgement, claim, source, store, url=_anchor_url(
                 source, claim)) if record_contradictions
-                and judgement.confidence >= min_confidence else [])
+                and judgement.confidence >= _bar(judgement, min_confidence)
+                else [])
             if not ops:
                 result.review.append({
                     "reason": "contradiction",
@@ -145,7 +156,7 @@ def plan(judgements: list[Judgement], claims: dict[str, Claim], source: Source,
             patch.operations.extend(ops)
             continue
 
-        if judgement.confidence < min_confidence:
+        if judgement.confidence < _bar(judgement, min_confidence):
             result.review.append({
                 "reason": "low_confidence",
                 "claim": claim.as_dict(),

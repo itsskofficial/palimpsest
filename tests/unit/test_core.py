@@ -411,3 +411,63 @@ def test_drop_missing_archives_rather_than_deletes(mirror):
     assert gone == 3
     assert mirror.get_page("pg_optim")["archived"] is True
     assert mirror.get_page("pg_optim") is not None, "the row must survive for the ledger"
+
+
+# ---------------------------------------------------------------------------
+# what job a page does
+# ---------------------------------------------------------------------------
+
+
+def _blocks(*lines: str) -> list[dict]:
+    from palimpsest.notion.blocks import paragraph
+
+    return [{"type": "paragraph", "text": line, "raw": paragraph(line)}
+            for line in lines]
+
+
+def test_a_science_note_is_not_a_project_log():
+    """The keyword scan was a substring match, so "psychology" contained "log".
+
+    Not a curiosity: "biology", "technology", "blog", "logic" and "log-log axes" all
+    matched, which quietly mislabelled a good fraction of any science notebook. A page's
+    role decides whether an edit appends prose to it or merely adds a link, so getting
+    this wrong changes what the agent writes.
+    """
+    from palimpsest.notion.mirror import guess_role
+
+    assert guess_role("Spaced repetition", _blocks(
+        "One of the largest effects in the psychology of learning.",
+        "Reviewing at increasing intervals beats massed practice.")) != "project_log"
+
+    assert guess_role("Scaling laws", _blocks(
+        "On log-log axes the relationship is a straight line.",
+        "That straightness is the whole result.")) != "project_log"
+
+    for title in ("Cell biology", "Notes on technology", "Propositional logic"):
+        assert guess_role(title, _blocks("Some prose about it.")) != "project_log", title
+
+
+def test_a_page_that_really_is_a_log_still_reads_as_one():
+    """The other direction, so the fix above cannot be "never say project_log"."""
+    from palimpsest.notion.mirror import guess_role
+
+    assert guess_role("Project log", _blocks("2026-08-30", "Set up the run.")) == "project_log"
+    assert guess_role("Work journal", _blocks("Monday.")) == "project_log"
+    assert guess_role("Anything", _blocks("todo: plot the histogram")) == "project_log"
+    assert guess_role("Anything", _blocks("meeting notes from today")) == "project_log"
+
+
+def test_a_page_of_wikilinks_is_a_hub():
+    """A markdown vault writes page references as `[[Title]]`, which carry no href.
+
+    Without recognising them an index page looks like ordinary prose, and the planner
+    appends paragraphs to it — the one thing a hub must never get.
+    """
+    from palimpsest.notion.blocks import bullet, links_in
+    from palimpsest.notion.mirror import guess_role
+
+    links = [{"type": "bulleted_list_item", "text": f"- [[{t}]]", "raw": bullet(f"[[{t}]]")}
+             for t in ("Gradient clipping", "Scaling laws", "Spaced repetition",
+                       "Sleep and memory")]
+    assert links_in(links[0]["raw"]) == ["Gradient clipping"]
+    assert guess_role("Knowledge base", links) == "hub"

@@ -7,6 +7,8 @@ control surface for your own notes, not a multi-tenant service, and `config.vali
 refuses to bind publicly without `PALIMPSEST_API_KEY`.
 """
 
+from typing import Any
+
 __all__ = ["AppState", "create_app", "run"]
 
 
@@ -20,8 +22,13 @@ def __getattr__(name: str):
 
 
 def run(host: str | None = None, port: int | None = None, db: str | None = None,
-        reload: bool = False) -> None:
-    """Start the server. Called by `palimpsest serve`."""
+        reload: bool = False, settings: Any = None) -> None:
+    """Start the server. Called by `palimpsest serve`.
+
+    `settings` lets a caller hand over a fully-built configuration instead of having one
+    read from the environment — which is how `palimpsest demo` points the same server at
+    a sample vault without writing the demo's choices into anybody's config file.
+    """
     try:
         import uvicorn
     except ImportError as e:  # pragma: no cover - optional extra
@@ -31,7 +38,13 @@ def run(host: str | None = None, port: int | None = None, db: str | None = None,
     from palimpsest.serve.app import AppState, create_app
     from palimpsest.serve.middleware import configure_logging
 
-    settings = Settings.load(host=host, port=port, database_url=db)
+    if settings is None:
+        settings = Settings.load(host=host, port=port, database_url=db)
+    elif host or port:
+        import dataclasses
+
+        settings = dataclasses.replace(
+            settings, host=host or settings.host, port=port or settings.port)
     configure_logging(settings.log_level, settings.log_json)
     state = AppState(settings=settings)
 

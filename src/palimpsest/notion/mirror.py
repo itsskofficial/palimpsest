@@ -24,13 +24,15 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 from palimpsest.notion.blocks import block_to_text, links_in, plain_text
-from palimpsest.notion.client import NotionClient, NotionError
+from palimpsest.notion.client import NotionError
+from palimpsest.notion.protocol import Workspace
 
 __all__ = [
     "MirrorResult",
@@ -145,7 +147,23 @@ def guess_role(title: str, blocks: list[dict]) -> str:
         return "hub"
     if any(k in lowered for k in ("arxiv", "doi:", "paper:", "et al", "abstract:")):
         return "literature_note"
-    if any(k in lowered for k in ("todo", "standup", "log", "journal", "meeting notes")):
+    # Whole words, and the ambiguous ones only in the title.
+    #
+    # This was a substring scan over title and body, which read "psychology",
+    # "biology", "blog" and "log-log axes" as evidence of a project log. That is not
+    # a rare shape in a knowledge base -- it mislabelled a good fraction of any
+    # science notebook -- and a page role decides whether an edit appends prose or
+    # adds a link, so the mistake changes what the agent writes to the page.
+    #
+    # Tokenising fixes the substrings but not "log", which is a real word inside
+    # "log-log" and "log scale". Somebody who keeps a project log says so in the
+    # title; nobody titles a page "log" and means logarithms.
+    def words_in(text: str) -> set[str]:
+        return set(re.findall("[a-z]+", text.lower()))
+
+    if words_in(title) & {"log", "journal", "diary", "standup", "changelog"}:
+        return "project_log"
+    if words_in(lowered) & {"todo", "standup"} or "meeting notes" in lowered:
         return "project_log"
     if words < 120 and headings == 0:
         return "scratchpad"
@@ -162,7 +180,7 @@ def _content_hash(texts: list[str]) -> str:
     return h.hexdigest()[:32]
 
 
-def _collect_blocks(client: NotionClient, page_id: str, root: str,
+def _collect_blocks(client: Workspace, page_id: str, root: str,
                     max_depth: int = 4) -> list[dict]:
     """Flatten a page's block tree, depth-first, recording position and depth.
 
@@ -203,7 +221,7 @@ def _collect_blocks(client: NotionClient, page_id: str, root: str,
     return out
 
 
-def refresh_pages(client: NotionClient, store, page_ids: Iterable[str], *,
+def refresh_pages(client: Workspace, store, page_ids: Iterable[str], *,
                   profile: bool = True) -> int:
     """Pull specific pages into the mirror by id. Returns how many were refreshed.
 
@@ -263,7 +281,7 @@ def refresh_pages(client: NotionClient, store, page_ids: Iterable[str], *,
     return refreshed
 
 
-def sync(client: NotionClient, store, *, incremental: bool = True,
+def sync(client: Workspace, store, *, incremental: bool = True,
          roots: tuple[str, ...] = (), limit: int | None = None,
          profile: bool = True, on_progress: Callable[[int, int, str], None] | None = None,
          ) -> MirrorResult:

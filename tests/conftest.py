@@ -15,7 +15,7 @@ from palimpsest.types import Anchor, Claim, ClaimType, Source, new_id
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_config(monkeypatch):
+def _hermetic_config(monkeypatch, request):
     """Never let a developer's real `.env` or saved config leak into a test.
 
     `Settings.load()` reads a persisted config file so a set-up machine stays set up —
@@ -29,7 +29,16 @@ def _hermetic_config(monkeypatch):
     key exported in their shell would see "a model is configured" in a test that set no
     model at all — and the suite would then pass for them and fail in CI, which is the
     worst way to learn about it.
+
+    A test marked `api` is the exception, and has to be: its entire purpose is to reach
+    a configured provider. Left hermetic, such a test does not fail — it finds no key,
+    quietly falls back to whatever local runtime happens to be up, and then reports on a
+    7B model while claiming to report on the one you configured. That is exactly how the
+    demo's promise tests came to disagree with the same prompt run by hand.
     """
+    if request.node.get_closest_marker("api"):
+        return
+
     monkeypatch.setattr("palimpsest.config.load_env_file", lambda *a, **k: 0)
     for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY",
                  "OPENROUTER_API_KEY", "TOGETHER_API_KEY", "DEEPSEEK_API_KEY",

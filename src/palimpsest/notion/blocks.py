@@ -20,6 +20,7 @@ what lets the entire patch planner be tested offline.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 __all__ = [
@@ -95,6 +96,10 @@ def block_to_text(block: dict) -> str:
     return text
 
 
+#: `[[Page title]]` -- how a markdown vault refers to another page.
+_WIKILINK = re.compile(r"\[\[([^\]]+)\]\]")
+
+
 def links_in(block: dict) -> list[str]:
     """Page ids this block links to — mentions and inline links to Notion pages."""
     btype = block.get("type", "")
@@ -114,6 +119,11 @@ def links_in(block: dict) -> list[str]:
         href = run.get("href") or ""
         if href.startswith("/") and len(href) >= 33:
             out.append(href.lstrip("/").split("?")[0].split("-")[-1].replace("-", ""))
+    # A markdown vault writes page references as `[[Title]]`, which carry no href
+    # at all. Without this a vault's index pages look like ordinary prose to
+    # `guess_role`, and the planner appends paragraphs to a hub instead of adding
+    # a link to it -- which is the one thing a hub must never get.
+    out.extend(_WIKILINK.findall(plain_text(body.get("rich_text"))))
     return out
 
 

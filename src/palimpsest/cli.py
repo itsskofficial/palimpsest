@@ -16,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 
+from palimpsest import _console as C
 from palimpsest._console import install as _install_console
 from palimpsest._version import __version__
 
@@ -433,6 +434,48 @@ def cmd_setup(args) -> int:
     return 0
 
 
+def cmd_demo(args) -> int:
+    """A full knowledge base to try, with nothing of yours at risk.
+
+    The whole product against a sample vault: same mirror, same retrieval, same
+    classifier, same planner, same one write door, same undo. Only the storage changes.
+    """
+    from palimpsest import demo, serve, workspace
+    from palimpsest.notion import mirror
+    from palimpsest.store import open_store
+
+    vault = demo.install(args.dir or demo.default_home(), force=args.reset)
+    settings = demo.settings_for(vault)
+    settings, model = demo.ensure_model(settings)
+
+    store = open_store(settings.database_url)
+    try:
+        synced = mirror.sync(workspace.open(settings), store, incremental=not args.reset)
+    finally:
+        store.close()
+
+    print()
+    print(f"  demo vault  {C.ARROW}  {vault}")
+    print(f"  pages       {C.ARROW}  {synced.pages} synced, {synced.blocks} blocks")
+    if model:
+        print(f"  model       {C.ARROW}  {model}")
+    else:
+        print("  model       !  none found, so nothing will be classified.")
+        print("               Set a key, or run: ollama pull qwen2.5:7b")
+    print()
+    print("  Nothing here touches your Notion. Delete the folder above and it is gone.")
+    print()
+    print("  Try pasting one of these into the capture box:")
+    for prompt in demo.PROMPTS:
+        print(f"    {C.BULLET} {prompt['label']}")
+    print()
+
+    if args.no_serve:
+        return 0
+    serve.run(host=args.host, port=args.port, settings=settings)
+    return 0
+
+
 def cmd_serve(args) -> int:
     from palimpsest import serve
     from palimpsest.config import Settings
@@ -757,6 +800,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("setup", aliases=["init", "onboard"],
                         help="interactive first-run setup: keys, Notion, Telegram")
     sp.set_defaults(func=cmd_setup)
+
+    sp = sub.add_parser("demo",
+                        help="try the whole thing on a sample vault, no account needed")
+    sp.add_argument("--dir", default=None,
+                    help="where to put the demo vault")
+    sp.add_argument("--reset", action="store_true",
+                    help="throw away an existing demo and start clean")
+    sp.add_argument("--host", default=None)
+    sp.add_argument("--port", type=int, default=None)
+    sp.add_argument("--no-serve", action="store_true",
+                    help="set the vault up and stop, without opening the app")
+    sp.set_defaults(func=cmd_demo)
 
     sp = sub.add_parser("serve", help="the review app + bot on :8100")
     sp.add_argument("--host", default=None)

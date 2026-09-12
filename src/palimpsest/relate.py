@@ -42,6 +42,14 @@ __all__ = ["ClassifyResult", "adjudicate", "classify", "classify_one"]
 
 log = logging.getLogger("palimpsest.relate")
 
+#: Relations that are statements about one particular sentence, and are meaningless
+#: without it. The rest — `new`, `extends` — are statements about where a claim
+#: belongs, and name a page.
+_NEEDS_BLOCK = frozenset({Relation.CORROBORATES, Relation.REFINES,
+                          Relation.SUPERSEDES, Relation.DUPLICATE,
+                          Relation.CONTRADICTS})
+
+
 #: How many claims are classified at once.
 #:
 #: Chosen against the provider's rate limit rather than the machine's
@@ -328,8 +336,7 @@ def classify_one(claim: Claim, source: Source, index: Index, model: Model, *,
         log.debug("model named an unknown block %s; dropping the reference",
                   judgement.target_block_id)
         judgement.target_block_id = None
-        if relation in (Relation.CORROBORATES, Relation.REFINES, Relation.SUPERSEDES,
-                        Relation.DUPLICATE, Relation.CONTRADICTS):
+        if relation in _NEEDS_BLOCK:
             judgement.relation = Relation.NEW
             judgement.confidence = min(judgement.confidence, 0.4)
             judgement.rationale += " (target block not found; routed to review as new)"
@@ -343,6 +350,29 @@ def classify_one(claim: Claim, source: Source, index: Index, model: Model, *,
                 None)
         elif pages:
             judgement.target_page_id = pages[0].page_id
+
+    # Both references exist, and they disagree: the named block lives on a different
+    # page than the named page. The model does this when the closest *existing* text
+    # is one place and the claim really belongs somewhere else -- "the only related
+    # line is a stub in the reading queue, but this finding belongs on the gradient
+    # clipping page". Left alone the operation anchors to a block on a page it was
+    # never meant to touch, which is a silent misplacement rather than an error.
+    #
+    # Which half to keep depends on what the relation is for. `refines`, `supersedes`,
+    # `corroborates`, `duplicate` and `contradicts` are all statements *about a
+    # particular sentence*, so the block is the real subject and its page is the one
+    # that must be edited. `new` and `extends` are statements about where a claim
+    # belongs, so the page is the real subject and the block was incidental.
+    block_page = next((c.page_id for c in candidates
+                      if c.block_id == judgement.target_block_id), None)
+    if (judgement.target_block_id and judgement.target_page_id
+            and block_page and block_page != judgement.target_page_id):
+        if judgement.relation in _NEEDS_BLOCK:
+            log.debug("block %s sits on another page; following the block",
+                      judgement.target_block_id)
+            judgement.target_page_id = block_page
+        else:
+            judgement.target_block_id = None
 
     return judgement
 

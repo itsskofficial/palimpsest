@@ -36,6 +36,7 @@ __all__ = [
     "ModelSetup",
     "Settings",
     "autonomy_warnings",
+    "confidence_bar",
     "config_path",
     "describe_embedding",
     "describe_setup",
@@ -116,6 +117,28 @@ RISK_TIERS = frozenset({"low", "medium", "high"})
 #: and including `full` therefore refuses this tier, and the levels are derived from this
 #: constant rather than each remembering the rule for itself.
 NEVER_AUTOMATIC = frozenset({"high"})
+
+
+#: How sure the classifier has to be, scaled by what being wrong would cost.
+#:
+#: `PALIMPSEST_MIN_CONFIDENCE` used to be one flat bar for all seven relations,
+#: which quietly meant the opposite of what it looked like. A well-calibrated model
+#: reports lower confidence for "this needs a page of its own" than for "this agrees
+#: with line 12", because the first is a judgement about a whole knowledge base and
+#: the second is a comparison of two sentences. So the flat bar rejected the *safest*
+#: operation -- one additive block, undone in a click -- most often, while letting a
+#: strike-through through on the same number.
+#:
+#: These are multipliers on the setting, so one knob still moves the whole scale, and
+#: raising it still tightens everything. At the default 0.75 the bars are 0.60 for a
+#: purely additive edit, 0.75 for one that rewrites a sentence, and 0.90 for one that
+#: changes what an existing sentence means.
+CONFIDENCE_BY_RISK: dict[str, float] = {"low": 0.8, "medium": 1.0, "high": 1.2}
+
+
+def confidence_bar(risk: str, base: float) -> float:
+    """The bar an operation at this risk tier must clear."""
+    return min(1.0, base * CONFIDENCE_BY_RISK.get(risk, 1.0))
 
 #: Which risk tiers may be applied without a human, per level.
 #:

@@ -29,7 +29,8 @@ import time
 from dataclasses import dataclass, field
 
 from palimpsest.notion import blocks as B
-from palimpsest.notion.client import NotionClient, NotionError
+from palimpsest.notion.client import NotionError
+from palimpsest.notion.protocol import Workspace
 from palimpsest.types import Operation, OpKind, Patch
 
 __all__ = ["ApplyResult", "apply_patch", "revert_patch"]
@@ -261,7 +262,7 @@ def _resolve_refs(patch: Patch, op: Operation) -> dict:
     return payload
 
 
-def _execute(client: NotionClient, store, op: Operation, patch: Patch | None = None) -> dict:
+def _execute(client: Workspace, store, op: Operation, patch: Patch | None = None) -> dict:
     """Perform one operation against Notion and return the raw response."""
     p = _resolve_refs(patch, op) if patch is not None else op.payload
 
@@ -360,7 +361,7 @@ def _execute(client: NotionClient, store, op: Operation, patch: Patch | None = N
     raise ValueError(f"unhandled operation kind {op.kind}")
 
 
-def _archive_created(client: NotionClient, block_id: str) -> None:
+def _archive_created(client: Workspace, block_id: str) -> None:
     """Archive a block this patch created, tolerating one that already went.
 
     An operation that creates a parent and its children (a footnote toggle and the
@@ -379,7 +380,7 @@ def _archive_created(client: NotionClient, block_id: str) -> None:
         raise
 
 
-def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
+def _execute_inverse(client: Workspace, store, inverse: dict) -> None:
     """Perform an inverse. Inverses have their own small vocabulary."""
     kind = inverse["kind"]
     target = inverse["target"]
@@ -429,7 +430,7 @@ def _execute_inverse(client: NotionClient, store, inverse: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def apply_patch(client: NotionClient, store, patch: Patch, *,
+def apply_patch(client: Workspace, store, patch: Patch, *,
                 dry_run: bool = False, reviewer: str | None = None,
                 journal=None) -> ApplyResult:
     """Apply a patch to Notion, recording everything needed to undo it.
@@ -519,7 +520,7 @@ def apply_patch(client: NotionClient, store, patch: Patch, *,
     return result
 
 
-def _refresh_mirror(client: NotionClient, store, patch: Patch) -> None:
+def _refresh_mirror(client: Workspace, store, patch: Patch) -> None:
     """Pull the pages this patch touched back into the mirror.
 
     Without this the product visibly fails its own thesis on the *second* capture. The
@@ -559,7 +560,7 @@ def _refresh_mirror(client: NotionClient, store, patch: Patch) -> None:
                     "pick it up", patch.patch_id, e)
 
 
-def revert_patch(client: NotionClient, store, patch: Patch,
+def revert_patch(client: Workspace, store, patch: Patch,
                  reviewer: str | None = None, journal=None) -> ApplyResult:
     """Undo an applied patch, exactly.
 

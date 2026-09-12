@@ -37,7 +37,8 @@ import logging
 import time
 from typing import Any
 
-from palimpsest.notion.client import NotionClient, NotionError
+from palimpsest.notion.client import NotionError
+from palimpsest.notion.protocol import Workspace
 from palimpsest.types import Operation, OpKind
 
 __all__ = ["CHANGES", "SOURCES", "Journal"]
@@ -155,7 +156,7 @@ def _why(op: Operation, payload: dict) -> str:
 class Journal:
     """Writes the ledger into Notion. Built once per process and reused."""
 
-    def __init__(self, client: NotionClient, store, root_page_id: str | None,
+    def __init__(self, client: Workspace, store, root_page_id: str | None,
                  enabled: bool = True):
         self.client = client
         self.store = store
