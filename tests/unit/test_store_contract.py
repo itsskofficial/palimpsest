@@ -469,3 +469,25 @@ def test_both_backends_were_actually_exercised(store):
     assert store.backend_name in ("sqlite", "postgres")
     if store.backend_name == "sqlite" and not POSTGRES_URL:
         pytest.skip("no PALIMPSEST_TEST_POSTGRES; Postgres half of the contract not run")
+
+
+def test_two_eval_runs_in_the_same_clock_tick_still_order(store):
+    """`created_at` is `time.time()`, whose resolution on Windows is about 15ms, so two
+    runs recorded back to back share a timestamp and `ORDER BY created_at DESC` alone
+    picks arbitrarily between them.
+
+    The leaderboard records several models in a loop, which is precisely that shape —
+    and `palimpsest status` reads the result to decide whether to warn you that the model
+    with write access has never been measured or was measured and failed.
+    """
+    now = time.time()
+    for i, score in enumerate((0.42, 0.61, 0.88)):
+        store.put_eval_run({"run_id": f"run_{i}", "suite": "component", "model": "m",
+                            "scores": {"weighted_f1": score}, "passed": score > 0.8,
+                            "created_at": now})          # identical, on purpose
+
+    last = store.last_eval_run("component", "m")
+
+    assert last is not None
+    assert last["scores"]["weighted_f1"] == 0.88, "the newest row must win a tie"
+    assert last["passed"] is True

@@ -691,8 +691,13 @@ class SQLiteStore:
         match here would be a way to inherit somebody else's number.
         """
         row = self.conn.execute(
+            # `rowid` breaks the tie. `created_at` is `time.time()`, whose resolution
+            # on Windows is about 15ms -- so two runs recorded back to back get the same
+            # value and order arbitrarily, and `status` then reports whichever the
+            # engine happened to pick. The leaderboard records several models in a loop,
+            # which is exactly that shape.
             "SELECT * FROM eval_runs WHERE suite=? AND model=? "
-            "ORDER BY created_at DESC LIMIT 1", (suite, model)).fetchone()
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (suite, model)).fetchone()
         if row is None:
             return None
         out = dict(row)

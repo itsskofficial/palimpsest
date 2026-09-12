@@ -684,8 +684,9 @@ class PostgresStore:
     def last_eval_run(self, suite: str, model: str) -> dict | None:
         """See the SQLite implementation."""
         with self._cur() as cur:
+            # See the SQLite note: ties in `created_at` must not order arbitrarily.
             cur.execute("SELECT * FROM eval_runs WHERE suite=%s AND model=%s "
-                        "ORDER BY created_at DESC LIMIT 1", (suite, model))
+                        "ORDER BY created_at DESC, ctid DESC LIMIT 1", (suite, model))
             row = cur.fetchone()
         if row is None:
             return None

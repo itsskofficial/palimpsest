@@ -20,8 +20,13 @@ __all__ = ["record"]
 def record(store, suite: str, metrics: dict, *, model: str | None = None) -> str:
     """Persist a run and push its headline numbers to Langfuse. Returns the run id."""
     run_id = new_id("run_")
+    # `not isinstance(v, bool)` is load-bearing: `bool` is a subclass of `int` in
+    # Python, so without it `passed` is collected as a *score* -- stored alongside the
+    # real numbers and pushed to Langfuse as 1.0, where it sits in the same chart as
+    # weighted F1 and means something entirely different.
     scores = {k: v for k, v in metrics.items()
-              if isinstance(v, int | float) and k not in ("n",)}
+              if isinstance(v, int | float) and not isinstance(v, bool)
+              and k not in ("n",)}
     store.put_eval_run({
         "run_id": run_id, "suite": suite, "model": model,
         "scores": {**scores, "n": metrics.get("n", 0)},
