@@ -1,11 +1,14 @@
 {
   "name": "palimpsest-desktop",
   "productName": "palimpsest",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A knowledge base that rewrites itself. Capture anything; approve what changes.",
   "homepage": "https://github.com/itsskofficial/palimpsest",
-  "author": "palimpsest",
+  "author": {
+    "name": "Sarthak Karandikar",
+    "email": "itsskofficial03@gmail.com"
+  },
   "license": "MIT",
   "main": "main.js",
   "type": "module",

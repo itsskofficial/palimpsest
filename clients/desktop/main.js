@@ -33,7 +33,32 @@ import { Backend, findPython } from "./backend.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
-const SHORTCUT = "CommandOrControl+Shift+Space";
+/**
+ * Candidate capture shortcuts, best first.
+ *
+ * `Ctrl+Shift+Space` is the one to want and the one most likely to be taken -- on
+ * Windows an IME or a launcher usually owns it, and `globalShortcut.register`
+ * answers by returning false rather than by throwing. A single hard-coded binding
+ * therefore lost the headline feature to whichever app booted first, silently, with
+ * a line in a log nobody opens.
+ *
+ * So: try them in order, keep the first that takes, and put the winner in the tray
+ * menu so the answer to "what is my shortcut" is where somebody would look.
+ */
+const SHORTCUTS = [
+  "CommandOrControl+Shift+Space",
+  "CommandOrControl+Alt+Space",
+  "CommandOrControl+Shift+P",
+  "CommandOrControl+Alt+P",
+];
+
+/** Whichever of the above actually registered, or null if every one was taken. */
+let shortcut = null;
+
+/** How a shortcut should be written for a person: Cmd on macOS, Ctrl elsewhere. */
+function prettyShortcut(combo) {
+  return combo.replace("CommandOrControl", process.platform === "darwin" ? "Cmd" : "Ctrl");
+}
 
 let tray = null;
 let captureWindow = null;
@@ -246,7 +271,12 @@ function refreshTray(next) {
       { label: `palimpsest — ${status}`, enabled: false },
       { type: "separator" },
       { label: "Open palimpsest", click: () => showMain() },
-      { label: `Quick capture (${SHORTCUT.replace("CommandOrControl", "Ctrl")})`, click: showCapture },
+      {
+        label: shortcut
+          ? `Quick capture (${prettyShortcut(shortcut)})`
+          : "Quick capture (no shortcut available)",
+        click: showCapture,
+      },
       { label: "Ask your notes", click: () => showMain("ask") },
       { type: "separator" },
       { label: "Settings…", click: () => showMain("settings") },
@@ -343,12 +373,22 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     migrateLegacyEnv();
-    buildTray();
     captureWindow = makeCaptureWindow();
 
-    if (!globalShortcut.register(SHORTCUT, showCapture)) {
-      log(`could not register ${SHORTCUT}; another app already owns it`, "error");
+    // Registering is instantaneous, so the tray is built once, afterwards, with the
+    // shortcut that actually took rather than the one we hoped for.
+    shortcut = SHORTCUTS.find((combo) => globalShortcut.register(combo, showCapture))
+      ?? null;
+    if (shortcut) {
+      log(`quick capture: ${prettyShortcut(shortcut)}`);
+    } else {
+      log(
+        `every capture shortcut is taken (${SHORTCUTS.map(prettyShortcut).join(", ")}). ` +
+          "Quick capture is still on the tray menu.",
+        "error",
+      );
     }
+    buildTray();
 
     backend = new Backend({
       venvDir: join(app.getPath("userData"), "venv"),

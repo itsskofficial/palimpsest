@@ -45,18 +45,29 @@ Everything else *is* applied, and every applied change has an Undo next to it.
 
 ## Then point it at your own notes
 
+**Install the app** — [latest release](https://github.com/itsskofficial/palimpsest/releases/latest)
+for Windows, macOS or Linux — and open it. A short wizard asks for your model and Notion
+keys, **checks each one on the spot**, and makes the single Notion page it works inside.
+Answers go to a config file it reads on every later start, so there is nothing to edit by
+hand.
+
+Then drop something on the window and watch what it proposes.
+
+There are three surfaces, and they are three surfaces on purpose:
+
+| | what it is for |
+|---|---|
+| **The app** | where you read what it proposes, approve or undo it, and ask your notes questions. Also a global shortcut that opens a capture box over whatever you are doing. |
+| **The Telegram bot** | your phone. Send it a link, a voice note, a photo of a whiteboard; approve changes from the sofa. |
+| **The browser extension** | capture from the page you are reading, without leaving it. |
+
+All three talk to the same local service, so there is one database, one config file and
+one set of keys however you came in. Prefer a terminal? Everything is also a command:
+
 ```bash
 pip install "palimpsest-notion[all]"
 palimpsest serve
 ```
-
-Or **install the desktop app** from [releases](https://github.com/itsskofficial/palimpsest/releases/latest)
-and open it. Either way the setup is the same and happens once: a short wizard asks for
-your model and Notion keys, **checks each one on the spot**, and makes the single Notion
-page it works inside. Answers go to a config file it reads on every later start, so there
-is nothing to edit by hand. Telegram is offered at the end and can be skipped.
-
-Then drop something on the window, and watch what it proposes.
 
 **Two backends.** Notion is the one this was built for. The other is a folder of markdown
 files — an Obsidian vault, a git repo, anything you can open with `cat`:
@@ -497,21 +508,24 @@ above them the two switches that decide whether anything reaches Notion at all �
 plain language, not as `PALIMPSEST_AUTONOMY=medium` buried in a list. Contradictions are
 never applied automatically at any setting, and the panel says so where you set it.
 
-The same interface is served three ways from one build: `palimpsest serve` on
-`127.0.0.1:8100`, the installable app that wraps it, and the onboarding wizard on first
-run. There is no second implementation to drift.
+The interface is built once and shipped inside the Python package, and the app is an
+Electron shell that loads it from the local service. That is why there is no second
+implementation to drift: the window, the onboarding wizard and anything you reach from a
+terminal are the same build.
 
-### The installable app
+### How the app works
 
-The installer is an Electron shell around that server, so the app and the terminal share
-one database, one config file and one set of keys. It does not bundle Python: on first
-run it builds a virtualenv under its own data directory and installs `palimpsest-notion`
-into it, which keeps the download small and lets the engine be upgraded without
-reinstalling the shell.
+It does not bundle Python. On first run it finds the interpreter you already have, builds
+a virtualenv under its own data directory, and installs `palimpsest-notion` into it —
+which keeps the download small and means the engine upgrades without reinstalling the
+shell. If a `palimpsest serve` is already running on the port, it adopts that rather than
+fighting it.
 
-It also adds the one thing a browser tab cannot: **Ctrl+Shift+Space anywhere**, which
-opens a small box over whatever you are doing. Drop a file, paste a link, press Enter —
-the box is gone before the ingest starts, because the queue outlives the window.
+It adds the one thing a tab cannot: **a global capture shortcut**, which opens a small box
+over whatever you are doing. Drop a file, paste a link, press Enter — the box is gone
+before the ingest starts, because the queue outlives the window. `Ctrl+Shift+Space` if it
+is free, and it tries three more if something else owns it; the tray menu always names
+the one that took.
 
 ```bash
 cd clients/desktop && npm install && npm run dist   # build the installer yourself
@@ -521,9 +535,9 @@ On Windows without developer mode, add `-c.win.signAndEditExecutable=false`: the
 toolchain unpacks symlinks Windows will not create unprivileged. CI builds all three
 platforms on tag.
 
-## Telegram, and the browser
+## Your phone, and the page you are reading
 
-Optional, and both thin wrappers over the same queue.
+The other two surfaces, both thin wrappers over the same queue.
 
 **Telegram** puts capture and approval on your phone. Send the bot a link, a PDF, a voice
 note, a screenshot or a paragraph; minutes later it tells you what changed — how many
