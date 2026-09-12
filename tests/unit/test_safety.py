@@ -474,7 +474,7 @@ def test_a_held_approval_still_applies_after_the_auto_half_ran(ctx):
     """The end-to-end shape of the same bug: approve, and it must actually write."""
     from palimpsest import approval
 
-    citation, rewrite, patch = _split_patch(ctx)
+    _, _, patch = _split_patch(ctx)
 
     notion = FakeNotion()
     out = approval.gate(ctx.store, patch,

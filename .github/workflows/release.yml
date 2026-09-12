@@ -58,6 +58,45 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
 
+  # The Python package, published by PyPI's trusted publishing rather than a token.
+  #
+  # This matters more here than it usually would. The installers do not contain the
+  # product -- they are an Electron shell that installs `palimpsest-notion` from PyPI on
+  # first run -- so a tag that ships installers without publishing the package produces
+  # an app that downloads the *previous* release and silently behaves like it.
+  #
+  # No PYPI_TOKEN secret: PyPI mints a short-lived credential from this workflow's OIDC
+  # identity, so there is no long-lived token to leak, rotate, or forget to rotate. It
+  # needs a one-time trusted publisher configured at
+  # https://pypi.org/manage/project/palimpsest-notion/settings/publishing/
+  # naming this repository, `release.yml`, and the `pypi` environment.
+  pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build && python -m build
+      # The tag is the version of record here too. Publishing a wheel whose version
+      # disagrees with the tag is unrecoverable, because a PyPI version can never be
+      # reused -- so this fails the release rather than shipping the wrong number.
+      - name: The tag and the package version must agree
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys
+          built = {p.name.split("-")[1] for p in pathlib.Path("dist").glob("*.whl")}
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          if built != {tag}:
+              sys.exit(f"tag {tag!r} but built {sorted(built)}")
+          print(f"tag and wheel agree on {tag}")
+          PY
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
   publish:
     needs: installers
     runs-on: ubuntu-latest
