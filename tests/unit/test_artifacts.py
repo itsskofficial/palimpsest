@@ -13,6 +13,7 @@ attention as everything else combined.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -38,11 +39,21 @@ def store(tmp_path):
     "../escaped.txt",
     "../../etc/passwd",
     "nested/../../escaped.txt",
-    "..\\escaped.txt",
 ])
 def test_a_key_that_climbs_out_of_the_root_is_refused(store, key, tmp_path):
     with pytest.raises(ValueError, match="escapes"):
         store.put_bytes(key, b"should not be written")
+
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+@pytest.mark.skipif(os.sep != "\\", reason="a backslash is an ordinary character on POSIX")
+def test_a_backslash_climb_is_refused_where_a_backslash_separates(store, tmp_path):
+    """Windows only. On Linux `..\\escaped.txt` is one perfectly legal filename sitting
+    inside the root, and refusing it there would reject a key somebody could reasonably
+    have written."""
+    with pytest.raises(ValueError, match="escapes"):
+        store.put_bytes("..\\escaped.txt", b"should not be written")
 
     assert not (tmp_path / "escaped.txt").exists()
 
@@ -271,12 +282,18 @@ def test_a_bare_path_with_no_scheme_is_treated_as_a_directory(tmp_path, monkeypa
     assert open_artifacts("archive").root == (tmp_path / "archive").resolve()
 
 
-def test_an_s3_url_selects_s3_without_needing_boto3_at_import(monkeypatch):
+def test_an_s3_url_selects_s3_and_says_which_extra_to_install(monkeypatch):
     """`boto3` is lazy on purpose: it is not a dependency of the default install, and a
-    laptop that never touches S3 must not need it."""
+    laptop that never touches S3 must not carry it. Which makes the message the thing
+    that matters when somebody does reach for S3 — an `ImportError` naming `boto3` sends
+    them to pip for the wrong package."""
     from palimpsest.artifacts import S3Artifacts
 
-    opened = open_artifacts("s3://my-bucket/palimpsest")
+    try:
+        opened = open_artifacts("s3://my-bucket/palimpsest")
+    except ImportError as e:
+        assert "palimpsest[aws]" in str(e)
+        return
 
     assert isinstance(opened, S3Artifacts)
     assert opened.bucket == "my-bucket"
