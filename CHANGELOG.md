@@ -70,6 +70,8 @@ fails without its fix.
   open when an API key is set — unbounded memory, and the ids exposed. Metrics now use
   route templates.
 
+---
+
 ## 0.2.0 — 2026-09-12
 
 The release that makes it possible to try this without giving anything write access to
