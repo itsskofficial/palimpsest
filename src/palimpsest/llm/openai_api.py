@@ -444,6 +444,12 @@ def _refused(data: dict, text: str) -> bool:
     """
     if _first_message(data).get("refusal"):
         return True
+    # OpenAI and Azure stop with `content_filter` and leave the content empty or cut
+    # short. Missing this sent `json()` down the "empty response" branch -- an error
+    # that reads like a flaky endpoint and invites a retry, for a request that will be
+    # filtered identically every time it is sent.
+    if (_first_choice(data).get("finish_reason") or "").lower() == "content_filter":
+        return True
     if len(text) > 400:
         return False
     return bool(re.match(r"^(i'?m sorry|i can(no|')t|i am unable|i won'?t)\b",
