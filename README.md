@@ -48,8 +48,8 @@ Everything else *is* applied, and every applied change has an Undo next to it.
 **Install the app** — [latest release](https://github.com/itsskofficial/palimpsest/releases/latest)
 for Windows, macOS or Linux — and open it. A short wizard asks for your model and Notion
 keys, **checks each one on the spot**, and makes the single Notion page it works inside.
-Answers go to a config file it reads on every later start, so there is nothing to edit by
-hand.
+The Telegram step is optional — skip it and add a bot later from Settings. Answers go to a
+config file it reads on every later start, so there is nothing to edit by hand.
 
 Then drop something on the window and watch what it proposes.
 
@@ -76,6 +76,7 @@ files — an Obsidian vault, a git repo, anything you can open with `cat`:
 PALIMPSEST_BACKEND=markdown PALIMPSEST_VAULT=~/vault palimpsest serve
 ```
 
+In the app, the same two settings live under **Settings → Or a folder of markdown files**.
 Same pipeline, same guarantees. See [Where your notes live](#where-your-notes-live).
 
 ```bash

@@ -8,6 +8,68 @@ tool that edits your notes is not a small thing, so those are called out individ
 
 ---
 
+## Unreleased
+
+Found by running the thing rather than reading it: every item below was caught by driving
+the desktop app, the queue, the bot or a real vault end to end, and each has a test that
+fails without its fix.
+
+### Fixed — things that stopped you
+
+- **Finishing setup returned you to the start of setup.** The wizard's Telegram step
+  offers "Skip", but "configured" required a bot token, so skipping it sent you back to
+  step one with no way out but to create a bot. Requiring a Notion token did the same to
+  every vault install. Configured now means somewhere to write and something to think with.
+- **First launch of the desktop app could fail with "duplicate column name".** The web
+  process and the queue workers open one SQLite file at once; migrations checked and then
+  applied as separate statements, so all of them ran the same `ALTER TABLE`. Migration now
+  holds the write lock throughout. `busy_timeout` was also set after the WAL pragma — the
+  one statement it could not help.
+- **A queue started a second time ran nothing.** Closing and reopening the window gave
+  you workers that read a stale stop flag and exited: captures accepted, none processed.
+  And a transient store error could end a worker thread for good; nothing in the loop can
+  now, except stopping it.
+- **Undo left a footnote's reasoning behind.** The rationale was a newline inside the
+  callout, which a vault reads back as a separate paragraph, so undoing a footnote removed
+  the citation and orphaned the explanation. Every page is now byte-identical after undo.
+- **The desktop app could not use a folder of markdown files.** The two settings were not
+  writable from the app. They are, under Settings.
+- **A credential could be added in Settings but never removed.** Emptying a field now
+  clears it.
+
+### Fixed — things that were quietly wrong
+
+- **Every citation printed its locator twice** (`A post · document · document`).
+- **Every capture from the browser extension lost its source URL.** A selection arrives as
+  text plus the tab's address, and the address was dropped before it reached the citation.
+- **The Ask panel showed raw Markdown and cited internal page ids.** Answers render now,
+  and cite pages as links — and a link the model invents rather than copies is demoted to
+  plain text, since a local model will sometimes fabricate a plausible URL.
+- **The Telegram bot never reported captures started by typing.** Text goes to the agent,
+  which queues the capture itself, and only captures the bot queued were reported.
+- **`/sync` and `/organise` on Telegram only worked with Notion.**
+- **Choosing an embedding provider and key in Settings did nothing.** Only a vendor's own
+  environment variable was honoured, and Together and Mistral were sent OpenAI's model.
+- **A sweep that found nothing left the previous sweep's findings on screen.**
+- **Lists written in one clock tick came back in arbitrary order**, so the activity feed
+  could reshuffle between polls of an unchanged table.
+- **`palimpsest status` failed its own health check on any install with writes on.** The
+  write-posture line is still printed; it no longer counts as a problem. `db check` also
+  answers in one second rather than twenty when the database is down.
+- **A content-filtered request was reported as an empty response.**
+- **The per-file upload limit could never be reached**, because the whole-request cap was
+  smaller than it.
+- **Messages across the product named `NOTION_TOKEN` on a vault install.** Six places now
+  name the setting the configured backend actually needs.
+
+### Security
+
+- **The archive's path check was a string prefix.** `../archive-evil/x` passed it and
+  wrote outside the archive root, in the one place the code says the key is untrusted.
+- **Every patch and job id became a permanent metric series** on `/metrics`, which stays
+  open when an API key is set — unbounded memory, and the ids exposed. Metrics now use
+  route templates.
+
 ## 0.2.0 — 2026-09-12
 
 The release that makes it possible to try this without giving anything write access to
