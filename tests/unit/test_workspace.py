@@ -45,7 +45,7 @@ def _para(content: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_both_backends_implement_the_whole_interface():
+def test_both_backends_implement_the_whole_interface(tmp_path):
     """The contract that makes a second backend possible at all.
 
     Not a formal `isinstance` check: `NotionClient` predates the protocol and takes extra
@@ -53,7 +53,9 @@ def test_both_backends_implement_the_whole_interface():
     an exact match. What must hold is that every name the pipeline calls exists on both.
     """
     assert check(NotionClient("ntn_x")) == []
-    assert check(MarkdownWorkspace("./nowhere-in-particular")) == []
+    # A temp directory, not a relative path: opening a vault creates its folders, so the
+    # relative one left `nowhere-in-particular/` in the repository root on every run.
+    assert check(MarkdownWorkspace(tmp_path / "vault")) == []
 
 
 def test_the_factory_returns_the_backend_the_settings_name(tmp_path):
