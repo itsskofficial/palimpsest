@@ -131,7 +131,7 @@ the same reason. The applier **computes each operation's inverse before running 
 `undo` is real because it captured the exact `rich_text` it is about to overwrite, and a
 generic `update_page` returns nothing of the kind. Its **vocabulary is the safety model**
 (`add_citation`, `strike_block`, `insert_footnote`); `update_page` is `rewrite_page`
-wearing a hat, which §5 of DECISIONS.md exists to prevent. It writes **provenance and
+wearing a hat, which §5 of [design.md](design.md) exists to prevent. It writes **provenance and
 journal rows inside the apply loop**, per operation. And it **paces itself** under
 Notion's ~3 req/s limit across a multi-thousand-request mirror sync.
 
@@ -306,7 +306,7 @@ Procedural memory is the one that earns its place. It holds things like:
 - *"Ingest arXiv links at high effort; they are dense."*
 - per-relation outcome statistics: `corroborates: 47 accepted, 1 rejected`
 
-**This is what makes the autonomy ladder learn.** NEXT_STEPS records that autonomy is
+**This is what makes the autonomy ladder learn.** The [roadmap](roadmap.md) records that autonomy is
 set by hand and the design was always that accept/reject history should raise it once
 measured precision clears a bar. Every tap on an Approve or Reject button is a labelled
 example; procedural memory accumulates them; the eval harness turns them into a
@@ -371,7 +371,7 @@ else's knowledge base tells you nothing about yours. Three uses:
 
 Build it by hand-labelling ~60 to bootstrap, then letting Approve/Reject taps grow it
 for free. That growth is continuous *evaluation*, not training. (If you later want the
-distilled small-model classifier NEXT_STEPS describes, *then* this becomes training data
+distilled small-model classifier the [roadmap](roadmap.md) describes, *then* this becomes training data
 — but that is a different project.)
 
 ### Layer 2 — Trajectory (agent behaviour)

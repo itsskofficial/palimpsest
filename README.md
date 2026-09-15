@@ -251,7 +251,7 @@ the first failure** with status `partial` rather than ploughing on.
 
 None of the above is a promise you have to take on trust. The invariants are pinned by
 [`tests/unit/test_safety.py`](tests/unit/test_safety.py), which runs offline with no key
-in every CI run, and they are written out in [docs/SAFETY.md](docs/SAFETY.md).
+in every CI run, and they are written out in [docs/safety.md](docs/safety.md).
 
 ---
 
@@ -593,13 +593,23 @@ Nothing is required to *look*; two keys are required to be useful. See
 
 `docker compose -f deploy/docker-compose.yml up` for the local stack against Supabase, or
 `deploy/terraform` for ECS Fargate + ALB + S3 + Secrets Manager in `ap-south-1`. See
-[DEPLOYMENT.md](DEPLOYMENT.md).
+[docs/deployment.md](docs/deployment.md).
 
-## Design decisions
+## Documentation
 
-[DECISIONS.md](DECISIONS.md) records what was chosen and what was rejected — the claim
-atom, the seven relations, why the inverse is written first, why BM25 rather than
-embeddings by default, and why there is no `autonomy=high`.
+- [docs/safety.md](docs/safety.md) — every limit the system places on itself, and the test that enforces it
+- [docs/design.md](docs/design.md) — what was chosen and what was rejected: the claim atom, the seven
+  relations, why the inverse is written first, why BM25 rather than embeddings by default
+- [docs/decisions/](docs/decisions/README.md) — architecture decision records
+- [docs/agent.md](docs/agent.md) — how the agent, its tools and the approval gate fit together
+- [docs/deployment.md](docs/deployment.md) — running it as a service
+- [docs/roadmap.md](docs/roadmap.md) — what is not built yet, and known limitations
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each release
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through
+[private disclosure](SECURITY.md), not public issues.
 
 ## Licence
 

@@ -9,6 +9,8 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .coverage
+.import_linter_cache/
+.deepeval/
 htmlcov/
 .DS_Store
 results/*.log

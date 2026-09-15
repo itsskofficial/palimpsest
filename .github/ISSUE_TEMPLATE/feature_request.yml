@@ -1,0 +1,21 @@
+name: Feature request
+description: Something it should do that it does not.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and where the current behaviour gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: A sketch of the behaviour you would want. Rough is fine.
+  - type: textarea
+    id: safety
+    attributes:
+      label: Anything it would change about what gets written
+      description: If the idea touches applying, undo, autonomy or review, say how. See docs/safety.md.

@@ -467,7 +467,7 @@ an ingest would quietly become a dependency the offline story forbids.
 
 - **Extraction quality is the ceiling.** Bad claims poison everything downstream. There
   is no per-relation precision measurement yet against a hand-labelled set of real
-  notes — that is the first thing in [NEXT_STEPS.md](NEXT_STEPS.md).
+  notes — that is the first item on the [roadmap](roadmap.md).
 - **The autonomy ladder does not yet learn.** The design is that accept/reject history
   raises autonomy per relation once measured precision clears a bar. Today autonomy is
   set by hand.

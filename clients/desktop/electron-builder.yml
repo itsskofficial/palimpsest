@@ -4,7 +4,7 @@
 
 appId: dev.palimpsest.desktop
 productName: palimpsest
-copyright: MIT
+copyright: Copyright 2026 Sarthak Karandikar
 directories:
   output: dist
 

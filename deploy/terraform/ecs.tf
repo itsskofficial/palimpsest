@@ -163,7 +163,7 @@ resource "aws_ecs_task_definition" "api" {
 }
 
 # Mirroring is a run-once task, not a service: it finishes. Schedule it with an
-# EventBridge rule (see DEPLOYMENT.md) or run it by hand with `aws ecs run-task`.
+# EventBridge rule (see docs/deployment.md) or run it by hand with `aws ecs run-task`.
 resource "aws_ecs_task_definition" "sync" {
   family                   = "${local.name}-sync"
   requires_compatibilities = ["FARGATE"]

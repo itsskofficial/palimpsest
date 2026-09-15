@@ -8,7 +8,7 @@ tool that edits your notes is not a small thing, so those are called out individ
 
 ---
 
-## Unreleased
+## 0.2.1 — 2026-09-15
 
 Found by running the thing rather than reading it: every item below was caught by driving
 the desktop app, the queue, the bot or a real vault end to end, and each has a test that
@@ -62,6 +62,20 @@ fails without its fix.
 - **Messages across the product named `NOTION_TOKEN` on a vault install.** Six places now
   name the setting the configured backend actually needs.
 
+### Documentation
+
+- Design, deployment, safety and agent documents now live under [`docs/`](docs/README.md),
+  with an index. The roadmap and known limitations are in
+  [`docs/roadmap.md`](docs/roadmap.md).
+- Two new decision records: schema migrations hold one write lock
+  ([ADR 14](docs/decisions/0014-migrations-hold-one-write-lock.md)), and links in an answer
+  must point into the mirror
+  ([ADR 15](docs/decisions/0015-links-in-an-answer-point-into-the-mirror.md)).
+- `CONTRIBUTING.md`, `SECURITY.md` with private vulnerability reporting, and issue and pull
+  request templates.
+- The licence file carries the full Apache-2.0 text, and the desktop app no longer
+  declares itself MIT.
+
 ### Security
 
 - **The archive's path check was a string prefix.** `../archive-evil/x` passed it and
@@ -95,7 +109,7 @@ your real notes.
 - **`palimpsest eval leaderboard --models a,b,c`.** Scores several models against the same
   committed golden set and prints the table as markdown. Contradiction recall is the
   column to read.
-- **[`docs/SAFETY.md`](docs/SAFETY.md)** — every limit the system places on itself, each
+- **[`docs/safety.md`](docs/safety.md)** — every limit the system places on itself, each
   one pointing at the test that enforces it. A test now fails if the document cites a test
   that no longer exists, or omits an autonomy level.
 - Suggested captures in the demo UI, each stating what it will do — and

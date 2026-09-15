@@ -1,7 +1,7 @@
 # Architecture decision records
 
 Decisions already made in this codebase, one per file, with what each one costs.
-[DECISIONS.md](../../DECISIONS.md) is the wider narrative; these are the load-bearing
+[design.md](../design.md) is the wider narrative; these are the load-bearing
 ones, recorded in the form.
 
 1. [The atom is a claim, not a document](0001-the-atom-is-a-claim-not-a-document.md) — why relation classification rather than "embed and rewrite".
@@ -17,3 +17,5 @@ ones, recorded in the form.
 11. [The workspace is an interface, not Notion](0011-the-workspace-is-an-interface-not-notion.md) — seventeen methods behind one write door, and what a second backend buys.
 12. [The confidence bar scales with what the edit would do](0012-confidence-scales-with-what-the-edit-would-do.md) — why one threshold for seven relations was backwards.
 13. [The demo runs the real pipeline](0013-the-demo-runs-the-real-pipeline.md) — not a recording, and its promises are tested against a live model.
+14. [Migrations hold one write lock](0014-migrations-hold-one-write-lock.md) — how several processes open one fresh SQLite file without racing.
+15. [Links in an answer point into the mirror](0015-links-in-an-answer-point-into-the-mirror.md) — why a citation the model invented is demoted to plain text.

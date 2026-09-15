@@ -1,0 +1,57 @@
+name: Bug report
+description: Something does not work the way the docs say it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security problem, please use [private reporting](https://github.com/itsskofficial/palimpsest/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest steps that show it. A command, a capture, or a sample page is ideal.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      options:
+        - Desktop app
+        - Telegram bot
+        - Browser extension
+        - Command line
+        - Server / API
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Workspace
+      options:
+        - Notion
+        - Markdown vault
+        - Demo
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `palimpsest status`
+      description: It redacts secrets, but please check before pasting.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "palimpsest --version"
+    validations:
+      required: true

@@ -1,7 +1,7 @@
 {
   "name": "palimpsest-desktop",
   "productName": "palimpsest",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "A knowledge base that rewrites itself. Capture anything; approve what changes.",
   "homepage": "https://github.com/itsskofficial/palimpsest",
@@ -9,7 +9,7 @@
     "name": "Sarthak Karandikar",
     "email": "itsskofficial03@gmail.com"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "main": "main.js",
   "type": "module",
   "scripts": {
