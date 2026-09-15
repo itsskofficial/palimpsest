@@ -167,3 +167,32 @@ test("a link keeps its label and its href apart", () => {
   assert.equal(link.label, "Sleep and memory");
   assert.equal(link.href, "https://notion.so/p");
 });
+
+// ---------------------------------------------------------------------------
+// nesting
+// ---------------------------------------------------------------------------
+
+test("a link wrapped in bold is still a link", () => {
+  // How the agent cites a page: `**[Title](url)**`. The bold branch of the
+  // alternation swallows the whole run, so without nesting the reader sees the
+  // brackets and the raw URL printed in bold.
+  const [token] = tokenise("**[Sleep and memory](https://notion.so/p)**");
+  assert.equal(token.type, "bold");
+  assert.deepEqual(token.children.map((t) => t.type), ["link"]);
+  assert.equal(token.children[0].label, "Sleep and memory");
+  assert.equal(token.children[0].href, "https://notion.so/p");
+});
+
+test("emphasis around plain text keeps one text child", () => {
+  const [token] = tokenise("*just words*");
+  assert.equal(token.type, "italic");
+  assert.deepEqual(token.children.map((t) => t.value), ["just words"]);
+});
+
+test("tokenising a nested run does not rewind the outer scan", () => {
+  // `INLINE` is a /g regex, so it carries `lastIndex`. Recursing on the shared
+  // instance would restart the outer walk and drop everything after the first
+  // emphasised run.
+  const types = tokenise("a **[x](https://e.com)** b *c* d").map((t) => t.type);
+  assert.deepEqual(types, ["text", "bold", "text", "italic", "text"]);
+});

@@ -15,49 +15,51 @@
  * happens to contain `<script>` renders as those characters and nothing else.
  */
 import { Fragment, type ReactNode } from "react";
-import { parse, tokenise } from "@/lib/markdown-parse";
+import { parse, tokenise, type Token } from "@/lib/markdown-parse";
 
 function inline(text: string, keyPrefix: string): ReactNode[] {
-  return tokenise(text).map((token, i) => {
-    const key = `${keyPrefix}-${i}`;
-    switch (token.type) {
-      case "link":
-        return (
-          <a
-            key={key}
-            href={token.href}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="text-sepia underline decoration-rule underline-offset-2 transition hover:decoration-sepia"
-          >
-            {token.label}
-          </a>
-        );
-      case "bold":
-        return (
-          <strong key={key} className="font-semibold text-ink">
-            {token.value}
-          </strong>
-        );
-      case "code":
-        return (
-          <code
-            key={key}
-            className="rounded bg-raised px-1 py-0.5 font-mono text-[13px] text-soft"
-          >
-            {token.value}
-          </code>
-        );
-      case "italic":
-        return (
-          <em key={key} className="italic">
-            {token.value}
-          </em>
-        );
-      default:
-        return <Fragment key={key}>{token.value}</Fragment>;
-    }
-  });
+  return tokenise(text).map((token, i) => render(token, `${keyPrefix}-${i}`));
+}
+
+/** One token. Emphasis renders its children, so `**[Title](url)**` stays a link. */
+function render(token: Token, key: string): ReactNode {
+  switch (token.type) {
+    case "link":
+      return (
+        <a
+          key={key}
+          href={token.href}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="text-sepia underline decoration-rule underline-offset-2 transition hover:decoration-sepia"
+        >
+          {token.label}
+        </a>
+      );
+    case "bold":
+      return (
+        <strong key={key} className="font-semibold text-ink">
+          {token.children.map((child, j) => render(child, `${key}-${j}`))}
+        </strong>
+      );
+    case "code":
+      return (
+        <code
+          key={key}
+          className="rounded bg-raised px-1 py-0.5 font-mono text-[13px] text-soft"
+        >
+          {token.value}
+        </code>
+      );
+    case "italic":
+      return (
+        <em key={key} className="italic">
+          {token.children.map((child, j) => render(child, `${key}-${j}`))}
+        </em>
+      );
+    default:
+      return <Fragment key={key}>{token.value}</Fragment>;
+  }
 }
 
 /** Render a reply. Unknown syntax survives as the characters it was written with. */

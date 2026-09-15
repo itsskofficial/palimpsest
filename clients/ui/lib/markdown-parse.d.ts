@@ -16,8 +16,8 @@ export type Block =
 export type Token =
   | { type: "text"; value: string }
   | { type: "link"; label: string; href: string }
-  | { type: "bold"; value: string }
-  | { type: "italic"; value: string }
+  | { type: "bold"; value: string; children: Token[] }
+  | { type: "italic"; value: string; children: Token[] }
   | { type: "code"; value: string };
 
 export declare const INLINE: RegExp;

@@ -80,18 +80,31 @@ export function parse(source) {
 /**
  * Split one line into text and marked-up runs, in order.
  *
+ * Emphasis nests. The model writes a cited page as `**[Title](url)**`, and the
+ * alternation above cannot see inside that: at the `*` the link branch fails, the bold
+ * branch matches the whole run, and the link markup ends up printed as its own
+ * characters — a bracket, a title, and a bare Notion URL, in bold, on the one screen
+ * that is supposed to show a clean answer. So bold and italic carry `children`, which is
+ * this function applied to what they wrapped. Recursion terminates because the inner
+ * text is strictly shorter, and `code` does not recurse because its content is literal.
+ *
+ * The scan uses its own regex instance rather than the shared `INLINE`. A `/g` regex
+ * carries `lastIndex` across calls, so recursing on the module-level one would rewind
+ * the loop that is still walking the outer string.
+ *
  * @param {string} text
  * @returns {({type: "text", value: string}
  *   | {type: "link", label: string, href: string}
- *   | {type: "bold" | "italic" | "code", value: string})[]}
+ *   | {type: "bold" | "italic", value: string, children: any[]}
+ *   | {type: "code", value: string})[]}
  */
 export function tokenise(text) {
   const out = [];
   let last = 0;
   let match;
-  INLINE.lastIndex = 0;
+  const scan = new RegExp(INLINE.source, INLINE.flags);
 
-  while ((match = INLINE.exec(text)) !== null) {
+  while ((match = scan.exec(text)) !== null) {
     if (match.index > last) {
       out.push({ type: "text", value: text.slice(last, match.index) });
     }
@@ -106,11 +119,13 @@ export function tokenise(text) {
           : { type: "text", value: token },
       );
     } else if (token.startsWith("**")) {
-      out.push({ type: "bold", value: token.slice(2, -2) });
+      const inner = token.slice(2, -2);
+      out.push({ type: "bold", value: inner, children: tokenise(inner) });
     } else if (token.startsWith("`")) {
       out.push({ type: "code", value: token.slice(1, -1) });
     } else {
-      out.push({ type: "italic", value: token.slice(1, -1) });
+      const inner = token.slice(1, -1);
+      out.push({ type: "italic", value: inner, children: tokenise(inner) });
     }
     last = match.index + token.length;
   }
