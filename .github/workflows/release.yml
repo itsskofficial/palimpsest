@@ -34,10 +34,10 @@ jobs:
             artifact: "clients/desktop/dist/*.AppImage"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm install
         working-directory: clients/desktop
       # The tag is the version of record. Without this the installer would be named for
@@ -52,7 +52,7 @@ jobs:
       # not have; users get a SmartScreen warning, which is honest about what this is.
       - run: npx electron-builder --publish never
         working-directory: clients/desktop
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: installer-${{ matrix.os }}
           path: ${{ matrix.artifact }}
@@ -65,17 +65,17 @@ jobs:
   extension:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm install
         working-directory: clients
       - name: The tests that guard what gets packed
         run: npm test
         working-directory: clients
       - run: node clients/extension/pack.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: extension
           path: clients/extension/dist/*.zip
@@ -100,8 +100,8 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install build && python -m build
@@ -125,6 +125,9 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      # Checkout first. It cleans the workspace, so when it ran after the download it
+      # deleted every installer, and v0.2.1 was published with no files attached.
+      - uses: actions/checkout@v7
       # Everything the matrix and the extension job uploaded, not just `installer-*` --
       # the narrower pattern silently published a release with no extension in it.
       - uses: actions/download-artifact@v4
@@ -134,7 +137,6 @@ jobs:
       # The changelog, not a list of commit subjects. `generate_release_notes` produces
       # the latter, which reads as an internal log rather than as an answer to "should I
       # upgrade" -- and the answer to that is already written, once, in CHANGELOG.md.
-      - uses: actions/checkout@v4
       - name: The notes for this version
         shell: bash
         run: |
@@ -153,3 +155,5 @@ jobs:
         with:
           files: installers/*
           body_path: notes.md
+          # A release with nothing to download is a failure, not a success with a warning.
+          fail_on_unmatched_files: true

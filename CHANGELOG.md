@@ -8,6 +8,21 @@ tool that edits your notes is not a small thing, so those are called out individ
 
 ---
 
+## Unreleased
+
+### Fixed
+
+- **The v0.2.1 release was published with no installers attached.** The release job
+  downloaded the build artifacts and then checked out the repository, which clears the
+  workspace. The files were attached to v0.2.1 afterwards, and a release with nothing to
+  attach now fails instead of publishing.
+
+### Changed
+
+- CI runs on Python 3.13 as well, and on Node 22 rather than Node 20, which reached end of
+  life.
+- `CODE_OF_CONDUCT.md`, adapted from the Contributor Covenant.
+
 ## 0.2.1 — 2026-09-15
 
 Found by running the thing rather than reading it: every item below was caught by driving
