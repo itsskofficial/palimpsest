@@ -45,7 +45,7 @@ const CANDIDATES = IS_WINDOWS
 const MIN_PYTHON = [3, 10];
 
 /** The extras the desktop app needs: a model, an HTTP server, and the file readers. */
-const EXTRAS = "[anthropic,serve,pdf,tabular]";
+const EXTRAS = "[anthropic,serve,pdf,tabular,youtube]";
 
 /** The published distribution. Not `palimpsest` — that name was already taken on PyPI. */
 const PACKAGE = "palimpsest-notion";

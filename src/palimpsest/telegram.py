@@ -592,6 +592,17 @@ class Bot:
         patch = result.get("patch") or {}
         counts = patch.get("by_relation") or {}
 
+        playlist = result.get("playlist")
+        if playlist:
+            note = (f" ({playlist['skipped']} unavailable)" if playlist.get("skipped")
+                    else "")
+            cut = (f"\nOnly the first {playlist['videos']} of {playlist['total']} were "
+                   "queued." if playlist.get("truncated") else "")
+            self._say(chat_id, f"📺 *{_md(str(playlist['title'])[:90])}*\n"
+                               f"Queued {playlist['videos']} video(s){note}. Each one "
+                               f"reports back here as it finishes.{cut}")
+            return
+
         title = source.get("title") or job.get("title") or "that"
         lines = [f"*{_md(str(title)[:90])}*"]
 

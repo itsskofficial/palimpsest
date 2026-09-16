@@ -86,6 +86,14 @@ export type JobEvent = {
   held?: number | null;
   approval_id?: string | null;
   error?: string | null;
+  playlist?: {
+    title: string;
+    url: string;
+    videos: number;
+    total: number;
+    skipped: number;
+    truncated: boolean;
+  } | null;
 };
 
 export type Operation = {

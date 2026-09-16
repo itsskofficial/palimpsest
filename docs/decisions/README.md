@@ -19,3 +19,4 @@ ones, recorded in the form.
 13. [The demo runs the real pipeline](0013-the-demo-runs-the-real-pipeline.md) — not a recording, and its promises are tested against a live model.
 14. [Migrations hold one write lock](0014-migrations-hold-one-write-lock.md) — how several processes open one fresh SQLite file without racing.
 15. [Links in an answer point into the mirror](0015-links-in-an-answer-point-into-the-mirror.md) — why a citation the model invented is demoted to plain text.
+16. [A claim with no home gets a new page](0016-a-claim-with-no-home-gets-a-new-page.md) — never the closest unrelated one, and the composed page keeps its citations.

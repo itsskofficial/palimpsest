@@ -161,6 +161,12 @@ def _page_object(page_id: str, meta: dict, path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+#: The parent a planner names when a vault should get a new top-level page. Notion needs a
+#: real root page for this (`PALIMPSEST_NOTION_ROOTS`); a vault's top level is its folder,
+#: and without something to name it the planner had nowhere to create a page at all.
+VAULT_ROOT = "vault-root"
+
+
 class MarkdownWorkspace:
     """A vault of markdown files, behind the interface `NotionClient` exposes.
 
@@ -487,7 +493,10 @@ class MarkdownWorkspace:
             while path.exists():
                 path = self.root / f"{name}-{suffix}.md"
                 suffix += 1
-            meta = {"id": page_id, "title": title, "parent": parent_page_id or "",
+            # A parent that is not a page in this vault -- `VAULT_ROOT` above all -- means
+            # the top level, which is where a new topic belongs.
+            parent = parent_page_id if parent_page_id in self._index() else ""
+            meta = {"id": page_id, "title": title, "parent": parent,
                     "icon": icon or "", "created": _now()}
             self._save(path, meta, [_strip_ids(c) for c in (children or [])])
             return {"object": "page", "id": page_id, "url": path.resolve().as_uri(),

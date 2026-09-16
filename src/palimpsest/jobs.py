@@ -232,6 +232,17 @@ def ingest_runner(settings, *, model_factory: Callable[[], Any],
                 "other OpenAI-compatible endpoint. The mirror, the sweeps and undo all "
                 "work without one.")
 
+        # A playlist is expanded rather than ingested: one job per video, queued behind
+        # this one, so each video is its own source with its own citations and its own
+        # line in the activity feed -- and one unavailable video costs only itself.
+        from palimpsest.ingest import detect_kind
+
+        if (job.get("source_kind") or detect_kind(spec)) == "youtube_playlist":
+            payload = expand_playlist(store, job)
+            if on_change is not None:
+                on_change()
+            return payload
+
         result = run_pipeline(
             spec, store, model_factory(), settings=settings,
             kind=job.get("source_kind"),
@@ -268,6 +279,34 @@ def ingest_runner(settings, *, model_factory: Callable[[], Any],
         return payload
 
     return run
+
+
+def expand_playlist(store, job: dict) -> dict:
+    """Queue one ingest job per video in a playlist, in playlist order.
+
+    The children inherit the parent's origin, so a playlist sent from Telegram reports
+    each video back to the same chat as it finishes, and an approval is routed there too.
+    A video already ingested is still queued: the pipeline recognises it by content hash
+    and reuses its claims without another model call, which is cheaper and more honest than
+    guessing from the URL whether the transcript has changed.
+    """
+    from palimpsest.ingest.youtube import playlist_videos
+
+    playlist = playlist_videos(job.get("spec") or "")
+    queued = []
+    for video in playlist["videos"]:
+        child = submit_spec(store, video["url"], source_kind="youtube",
+                            title=video["title"], url=video["url"],
+                            origin=job.get("origin"))
+        queued.append(child["job_id"])
+    return {
+        "playlist": {"title": playlist["title"], "url": playlist["url"],
+                     "videos": len(queued), "total": playlist["total"],
+                     "skipped": playlist["skipped"], "truncated": playlist["truncated"]},
+        "queued": len(queued),
+        "jobs": queued,
+        "claims": 0,
+    }
 
 
 def _cleanup_temp(spec: str) -> None:

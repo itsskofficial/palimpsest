@@ -436,6 +436,17 @@ def _spec_to_block(item: Any, depth: int, budget: list[int]) -> dict | None:
         if children:
             body["children"] = children
 
+    # Set by the composer, never by the model: `compose_page` drops any `_` key the model
+    # sends before adding these. `_link` makes the whole text a link; `_cite` appends
+    # citation markers after it. Top level only, because that is the only level the
+    # composer strips -- a nested child is exactly as the model wrote it.
+    if depth == 0 and "rich_text" in body and kind not in ("code",):
+        if item.get("_link") and body["rich_text"]:
+            body["rich_text"] = rich_text(text, link=str(item["_link"]),
+                                          color="gray")
+        if isinstance(item.get("_cite"), list):
+            body["rich_text"] = body["rich_text"] + item["_cite"]
+
     return {"object": "block", "type": kind, kind: body}
 
 

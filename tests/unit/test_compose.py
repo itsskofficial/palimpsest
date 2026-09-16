@@ -84,7 +84,7 @@ def test_a_composition_produces_notion_blocks_and_a_title():
 
     assert result.title == "Gradient clipping"
     assert result.icon == "📐"
-    assert [b["type"] for b in result.children] == ["heading_2", "paragraph"]
+    assert [b["type"] for b in result.children] == ["heading_2", "paragraph", "callout"],         "the layout, then the line naming the source"
     assert result.ok
 
 
@@ -153,7 +153,7 @@ def test_junk_in_the_block_list_is_skipped_rather_than_raising():
             "not a block",
             {"type": "paragraph", "text": "a fact", "claim_ids": ["clm_1"]}]}))
 
-    assert len(result.children) == 1
+    assert [b["type"] for b in result.children] == ["paragraph", "callout"]
     assert result.ok
 
 
@@ -284,3 +284,89 @@ def test_the_summary_says_what_was_covered_and_what_was_not():
     assert summary["claims_covered"] == 2
     assert summary["claims_missing"] == ["clm_3"]
     assert summary["blocks"] == 1
+
+
+# ---------------------------------------------------------------------------
+# citations survive composition
+# ---------------------------------------------------------------------------
+
+
+def _anchored(claim_id: str, text: str, locator: str, url: str | None) -> Claim:
+    return Claim(claim_id=claim_id, text=text, type=ClaimType.FACT, topics=("nn",),
+                 confidence=0.9, anchor=Anchor("timestamp", locator, 0, 10, url),
+                 source_id="src_1")
+
+
+def _runs(block: dict) -> list[dict]:
+    return block[block["type"]]["rich_text"]
+
+
+def test_a_composed_block_cites_the_moments_its_claims_came_from():
+    """The page for a lecture was written with no way back to the lecture: the claim ids
+    were the only record of which moment each block came from, and they were stripped."""
+    claims = [
+        _anchored("clm_1", "A neuron holds a number.", "0:37",
+                  "https://www.youtube.com/watch?v=v&t=37s"),
+        _anchored("clm_2", "Activations lie between 0 and 1.", "2:05",
+                  "https://www.youtube.com/watch?v=v&t=125s"),
+    ]
+    source = Source(source_id="src_1", kind="youtube", title="Chapter 1", text="x",
+                    url="https://www.youtube.com/watch?v=v")
+
+    result = compose_page(claims, source, FakeModel({"title": "Neurons", "blocks": [
+        {"type": "paragraph", "text": "A neuron holds an activation between 0 and 1.",
+         "claim_ids": ["clm_1", "clm_2"]}]}))
+
+    runs = _runs(result.children[0])
+    markers = [(r["text"]["content"].strip(), r["text"]["link"]["url"])
+               for r in runs[1:]]
+    assert markers == [("[0:37]", "https://www.youtube.com/watch?v=v&t=37s"),
+                       ("[2:05]", "https://www.youtube.com/watch?v=v&t=125s")]
+    assert all(r["annotations"]["color"] == "gray" for r in runs[1:])
+
+
+def test_the_page_ends_with_a_linked_line_naming_the_source():
+    result = compose_page(_claims("a fact"), _source(), FakeModel())
+
+    closing = result.children[-1]
+    assert closing["type"] == "callout"
+    run = _runs(closing)[0]
+    assert run["text"]["content"] == "Source: A post on clipping"
+    assert run["text"]["link"]["url"] == "https://example.com/p"
+
+
+def test_a_citation_with_nowhere_to_link_is_left_off():
+    """A pasted note's locator is "document". Bracketed and unlinked, it is noise."""
+    claims = [_anchored("clm_1", "a thought", "document", None)]
+    source = Source(source_id="src_1", kind="text", title="Note", text="x", url=None)
+
+    result = compose_page(claims, source, FakeModel({"title": "T", "blocks": [
+        {"type": "paragraph", "text": "a thought", "claim_ids": ["clm_1"]}]}))
+
+    assert len(_runs(result.children[0])) == 1
+    assert [b["type"] for b in result.children] == ["paragraph"], "and no source line"
+
+
+def test_a_block_folding_many_moments_carries_at_most_three_markers():
+    claims = [_anchored(f"clm_{i}", f"fact {i}", f"{i}:00",
+                        f"https://www.youtube.com/watch?v=v&t={i * 60}s") for i in range(8)]
+    source = Source(source_id="src_1", kind="youtube", title="T", text="x",
+                    url="https://www.youtube.com/watch?v=v")
+
+    result = compose_page(claims, source, FakeModel({"title": "T", "blocks": [
+        {"type": "paragraph", "text": "everything", "claim_ids": [c.claim_id for c in claims]}]}))
+
+    assert len(_runs(result.children[0])) == 1 + 3
+
+
+def test_citation_keys_from_the_model_are_ignored():
+    """`_cite` and `_link` turn into links on the page, so they are ours to set. A model
+    that emits them, at any depth, gets plain text."""
+    result = compose_page(_claims("a fact"), _source(), FakeModel({"title": "T", "blocks": [
+        {"type": "toggle", "text": "outer", "claim_ids": ["clm_1"],
+         "_link": "https://evil.example",
+         "children": [{"type": "paragraph", "text": "inner", "_link": "https://evil.example",
+                       "_cite": [{"type": "text", "text": {"content": "x",
+                                                          "link": {"url": "https://evil.example"}}}]}]}]}))
+
+    assert "evil.example" not in str(result.children)

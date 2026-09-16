@@ -182,6 +182,16 @@ function JobRow({ job }: { job: JobEvent }) {
 }
 
 function Outcome({ job }: { job: JobEvent }) {
+  if (job.playlist) {
+    const p = job.playlist;
+    return (
+      <>
+        queued {p.videos} video{p.videos === 1 ? "" : "s"}, each ingested on its own
+        {!!p.skipped && <> · {p.skipped} unavailable</>}
+        {p.truncated && <> · first {p.videos} of {p.total}</>}
+      </>
+    );
+  }
   if (!job.claims) return <>nothing worth keeping came out of it</>;
   const rel = Object.entries(job.by_relation ?? {})
     .map(([k, v]) => `${v} ${k}`)

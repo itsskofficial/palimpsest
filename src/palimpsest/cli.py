@@ -115,6 +115,11 @@ def cmd_ingest(args) -> int:
     model = _model(settings)
     archive = open_artifacts(settings.artifact_url)
 
+    from palimpsest.ingest import detect_kind
+
+    if (args.kind or detect_kind(args.spec)) == "youtube_playlist":
+        return _ingest_playlist(args, store, model, settings, archive)
+
     try:
         result = ingest(args.spec, store, model, settings=settings, kind=args.kind,
                         archive=archive, reuse=not args.fresh,
@@ -144,6 +149,47 @@ def cmd_ingest(args) -> int:
     _emit(result.as_dict(), args.out)
     store.close()
     return 0
+
+
+def _ingest_playlist(args, store, model, settings, archive) -> int:
+    """Every video in a playlist, one after another, each as its own source.
+
+    Synchronous like the rest of `ingest`, and a failure on one video is printed and
+    skipped: a single private or caption-less video should not cost the other nine.
+    """
+    from palimpsest.ingest.youtube import playlist_videos
+    from palimpsest.pipeline import ingest
+
+    try:
+        playlist = playlist_videos(args.spec)
+    except (RuntimeError, ValueError) as e:
+        raise SystemExit(str(e)) from e
+
+    videos = playlist["videos"]
+    print(f"{playlist['title']}: {len(videos)} video(s)"
+          + (f", {playlist['skipped']} unavailable" if playlist["skipped"] else "")
+          + (f" (first {len(videos)} of {playlist['total']})"
+             if playlist["truncated"] else ""))
+    outcomes, failed = [], 0
+    for i, video in enumerate(videos, start=1):
+        print(f"\n[{i}/{len(videos)}] {video['title']}")
+        try:
+            result = ingest(video["url"], store, model, settings=settings, kind="youtube",
+                            archive=archive, reuse=not args.fresh,
+                            max_windows=args.max_windows, title=video["title"],
+                            url=video["url"])
+        except (RuntimeError, ValueError, ImportError) as e:
+            failed += 1
+            print(f"  skipped: {str(e).splitlines()[0]}")
+            continue
+        print(f"  {result.summary()}")
+        if result.patch.operations:
+            print(f"  patch: {result.patch.patch_id}")
+        outcomes.append(result.as_dict())
+    print(f"\n{len(outcomes)} ingested, {failed} skipped")
+    _emit({"playlist": playlist, "results": outcomes}, args.out)
+    store.close()
+    return 1 if failed and not outcomes else 0
 
 
 def cmd_patch(args) -> int:
@@ -777,7 +823,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("spec", help="a URL, a file path, or text:'...'")
     common(sp)
     sp.add_argument("--kind", default=None,
-                    choices=["web", "youtube", "pdf", "image", "tabular", "text"])
+                    choices=["web", "youtube", "youtube_playlist", "pdf", "image",
+                             "tabular", "text"])
     sp.add_argument("--fresh", action="store_true", help="re-extract even if already ingested")
     sp.add_argument("--max-windows", type=int, default=None,
                     help="cap extraction windows (useful for a cheap first look)")

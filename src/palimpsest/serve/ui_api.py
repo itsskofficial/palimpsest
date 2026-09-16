@@ -577,6 +577,8 @@ def _job_event(job: dict) -> dict:
         "held": applied.get("held"),
         "approval_id": applied.get("approval_id"),
         "error": job.get("error"),
+        # A playlist job does no ingesting of its own; it queues one job per video.
+        "playlist": result.get("playlist"),
     }
 
 

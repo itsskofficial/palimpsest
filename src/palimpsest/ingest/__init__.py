@@ -28,7 +28,11 @@ from palimpsest.types import Anchor, Source, new_id
 
 __all__ = ["anchor_for", "detect_kind", "merge_cues", "resolve", "timestamp"]
 
-_YOUTUBE = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{6,})")
+_YOUTUBE = re.compile(r"(?:youtube\.com/watch\?(?:.*&)?v=|youtu\.be/|youtube\.com/shorts/"
+                      r"|youtube\.com/live/)([\w-]{6,})")
+#: `youtube.com/playlist?list=…` on its own. A playlist link used to fall through to the
+#: web adapter, which scraped the playlist *page* and extracted claims from its sidebar.
+_YOUTUBE_PLAYLIST = re.compile(r"youtube\.com/playlist\?(?:.*&)?list=[\w-]+")
 
 #: Timestamped cues are merged into passages of about this many characters. A single
 #: caption cue is too short for a claim to sit in, and a whole transcript is too coarse
@@ -120,6 +124,8 @@ def detect_kind(spec: str) -> str:
         return "transcript"
     if lowered.startswith("text:"):
         return "text"
+    if _YOUTUBE_PLAYLIST.search(spec):
+        return "youtube_playlist"
     if _YOUTUBE.search(spec):
         return "youtube"
     if lowered.startswith(("http://", "https://")):
@@ -199,6 +205,11 @@ def resolve(spec: str, *, kind: str | None = None, model=None,
         from palimpsest.ingest.files import from_tabular
 
         return from_tabular(spec)
+    if kind == "youtube_playlist":
+        raise ValueError(
+            "that is a YouTube playlist, which is several sources rather than one. Send it "
+            "through the capture queue (the app, the bot, the extension, or `palimpsest "
+            "ingest` from the command line) and every video is ingested on its own.")
     raise ValueError(f"no adapter for kind {kind!r}")
 
 

@@ -143,6 +143,7 @@ def compose_page(claims: list[Claim], source: Source, model: Model, *,
                          effort=effort)
 
     wanted = {c.claim_id for c in claims}
+    by_id = {c.claim_id: c for c in claims}
     spec: list[dict] = []
     covered: set[str] = set()
     for item in payload.get("blocks") or []:
@@ -150,13 +151,28 @@ def compose_page(claims: list[Claim], source: Source, model: Model, *,
             continue
         ids = [str(i) for i in (item.get("claim_ids") or []) if str(i) in wanted]
         covered.update(ids)
-        spec.append({k: v for k, v in item.items() if k != "claim_ids"})
+        # Keys starting with `_` are ours, so one arriving from the model is dropped
+        # rather than trusted -- `_cite` becomes rich text on the page.
+        block = {k: v for k, v in item.items() if k != "claim_ids" and not str(k).startswith("_")}
+        # The claim ids are the only record of which moment in the source each block came
+        # from. Stripping them without keeping that was how a composed page lost every
+        # citation: a page written from a lecture, with no way back to the lecture.
+        cite = _citations([by_id[i] for i in ids], source)
+        if cite:
+            block["_cite"] = cite
+        spec.append(block)
 
     try:
         children = B.blocks_from_spec(spec)
     except B.SpecError as e:
         log.warning("composition produced no usable blocks: %s", e)
         children = []
+
+    # After, not before: a composition that produced nothing must still come back empty,
+    # rather than as a page holding only the line that says where it came from.
+    source_line = _source_block(source)
+    if source_line and children:
+        children += B.blocks_from_spec([source_line])
 
     return ComposeResult(
         title=str(payload.get("title") or source.title or "Untitled")[:120],
@@ -166,6 +182,46 @@ def compose_page(claims: list[Claim], source: Source, model: Model, *,
         covered=covered,
         missing=wanted - covered,
     )
+
+
+#: How many citation markers one block carries. A paragraph folding eight claims from
+#: eight moments of a lecture would otherwise end in a row of timestamps longer than
+#: the sentence.
+MAX_CITATIONS_PER_BLOCK = 3
+
+
+def _citations(claims: list[Claim], source: Source) -> list[dict]:
+    """Small linked markers for where in the source a block's claims were made.
+
+    Only markers that link somewhere. A locator with no URL -- a pasted note's
+    "document" -- is a bracketed word that cannot be followed, which is noise rather than
+    a citation.
+    """
+    runs: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for claim in claims:
+        anchor = claim.anchor
+        url = (anchor.url if anchor else None) or source.url
+        if not url:
+            continue
+        label = (anchor.locator if anchor and anchor.locator
+                 and len(anchor.locator) <= 24 else "source")
+        if (label, url) in seen:
+            continue
+        seen.add((label, url))
+        runs.extend(B.citation_marker(label, url))
+        if len(seen) >= MAX_CITATIONS_PER_BLOCK:
+            break
+    return runs
+
+
+def _source_block(source: Source) -> dict | None:
+    """A closing line naming the source, so the page can be traced even where a block
+    carries no marker of its own."""
+    if not source.url:
+        return None
+    return {"type": "callout", "icon": "\U0001f4ce", "color": "gray_background",
+            "text": f"Source: {source.title or source.url}", "_link": source.url}
 
 
 def rewrite_page(page_id: str, block_ids: list[str], anchor_block_id: str | None,

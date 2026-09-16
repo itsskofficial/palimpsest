@@ -387,7 +387,8 @@ def build_registry(ctx: ToolContext) -> list[Tool]:
         # -- analyse --
         Tool("capture_source",
              "Ingest a source into the knowledge base: a URL, a YouTube link, a file "
-             "path, or 'text:...' / 'transcript:...'. Returns a job_id; ingestion runs in "
+             "path, or 'text:...' / 'transcript:...'. A YouTube playlist link queues every "
+             "video in it as its own source. Returns a job_id; ingestion runs in "
              "the background. Use when the user shares something to remember. Note: files "
              "the user sends are captured automatically, so you rarely need this for those.",
              _s(spec={"type": "string", "description": "url | path | text:... | transcript:..."},

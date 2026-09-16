@@ -1,8 +1,8 @@
 # palimpsest
 
 **A self-maintaining knowledge base — an AI agent that keeps your Notion (or your
-Obsidian vault) up to date as you learn.** Give it anything: a URL, a YouTube link, a PDF,
-a spreadsheet, a photographed whiteboard, or a sentence you typed. It works out how that
+Obsidian vault) up to date as you learn.** Give it anything: a URL, a YouTube video or a whole
+playlist, a PDF, a spreadsheet, a photographed whiteboard, or a sentence you typed. It works out how that
 information relates to what you have already written, then makes small, reversible,
 fully-cited edits to the right pages — rewriting what changed, striking what is no longer
 true, and recording what it disagrees with rather than quietly picking a winner.
@@ -200,6 +200,14 @@ capture → normalise → extract claims → retrieve → classify relation
 Every adapter emits *segments* — spans of normalised text with a citable locator. A PDF
 anchors to `p. 14`. A YouTube transcript anchors to `1:42:07` **and the footnote links
 to that second of the video**. A spreadsheet anchors to `Sheet1!A–D47`.
+
+Send a **YouTube playlist** and every video in it is ingested as its own source, in
+playlist order, each with its own timestamped citations — so a claim from chapter seven
+of a course cites chapter seven at the minute it was said, rather than "somewhere in the
+playlist". Private and deleted videos are skipped and counted, a playlist over 200 videos
+is cut off and says so, and a YouTube Mix is refused because it never ends. Captions come
+through [yt-dlp](https://github.com/yt-dlp/yt-dlp), in the `youtube` extra, preferring a
+track written by a person in the language actually spoken.
 
 The extractor maps each claim's character span back to its segment, and the original
 bytes are archived on the way in. So a footnote still resolves in two years when the

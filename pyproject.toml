@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "palimpsest-notion"
-version = "0.2.1"
+version = "0.2.2"
 description = "A self-maintaining knowledge base on top of Notion: extracts claims from anything, classifies how each one relates to what you already wrote, and applies small reversible patches with full provenance."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -58,6 +58,9 @@ agent = ["langfuse>=3.0"]
 
 # Ingestion adapters that need more than urllib.
 firecrawl = ["firecrawl-py>=2.0"]
+# YouTube captions and playlists. YouTube changes how both are served often enough that
+# a hand-written client breaks without warning; yt-dlp is maintained against that.
+youtube = ["yt-dlp>=2025.1"]
 pdf = ["pypdf>=4.2"]
 tabular = ["openpyxl>=3.1"]
 
@@ -86,8 +89,9 @@ dev = [
     # coverage of the formats most people will actually throw at this.
     "pypdf>=4.2",
     "openpyxl>=3.1",
+    "yt-dlp>=2025.1",
 ]
-all = ["palimpsest-notion[anthropic,embed,pdf,tabular,serve,postgres,aws,agent]"]
+all = ["palimpsest-notion[anthropic,embed,pdf,tabular,youtube,serve,postgres,aws,agent]"]
 
 [project.urls]
 Homepage = "https://github.com/itsskofficial/palimpsest"

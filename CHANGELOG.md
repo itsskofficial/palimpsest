@@ -8,9 +8,35 @@ tool that edits your notes is not a small thing, so those are called out individ
 
 ---
 
-## Unreleased
+## 0.2.2 — 2026-09-16
+
+### Added
+
+- **YouTube playlists.** Send a `youtube.com/playlist?list=…` link from the app, the bot,
+  the extension or `palimpsest ingest`, and every video is queued as its own source, in
+  playlist order, each with its own timestamped citations. Each video reports back as it
+  finishes. Private and deleted videos are skipped and counted, playlists are capped at 200
+  videos, and a YouTube Mix is refused. A single video shared from inside a playlist
+  (`watch?v=…&list=…`) is still just that video.
 
 ### Fixed
+
+- **YouTube links had stopped working.** YouTube began returning empty caption responses
+  to plain HTTP clients, so every YouTube capture failed with a JSON error. Captions now
+  come through yt-dlp (the new `youtube` extra, included in the desktop app and `all`),
+  which prefers a track written by a person in the video's spoken language, with the old
+  endpoint kept as a fallback.
+- **A playlist link was scraped as an ordinary web page**, producing claims about the
+  page's sidebar.
+- **Claims about a new subject were appended to unrelated pages.** A source nothing in the
+  notes covered had every claim filed on whichever page shared the most words with it — a
+  neural-networks course landed on "Gradient clipping". Three places forced a page onto a
+  claim the classifier had said had none; now such claims become one new, composed page
+  per source. A markdown vault can create that page too, which it previously could not.
+  ([ADR 16](docs/decisions/0016-a-claim-with-no-home-gets-a-new-page.md))
+- **A composed page had no citations.** Pages written by the composer dropped the link back
+  to where each claim came from. Every block now ends with linked markers for its moments
+  in the source (`[0:37]` on a video), and the page closes with a line naming the source.
 
 - **The v0.2.1 release was published with no installers attached.** The release job
   downloaded the build artifacts and then checked out the repository, which clears the
@@ -22,6 +48,8 @@ tool that edits your notes is not a small thing, so those are called out individ
 - CI runs on Python 3.13 as well, and on Node 22 rather than Node 20, which reached end of
   life.
 - `CODE_OF_CONDUCT.md`, adapted from the Contributor Covenant.
+
+---
 
 ## 0.2.1 — 2026-09-15
 

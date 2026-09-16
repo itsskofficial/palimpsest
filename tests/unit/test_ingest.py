@@ -102,6 +102,14 @@ def youtube(monkeypatch):
         raise RuntimeError(f"nothing recorded for {url}")
 
     monkeypatch.setattr(mod, "_fetch", fetch)
+
+    # yt-dlp goes first when it is installed, and it makes its own requests. Left in place
+    # it reached real YouTube from a unit test and returned whatever that video ID is
+    # today, so these tests exercise the timedtext path with it switched off.
+    def no_ytdlp(vid):
+        raise ImportError("yt_dlp")
+
+    monkeypatch.setattr(mod, "_cues_via_ytdlp", no_ytdlp)
     return responses
 
 

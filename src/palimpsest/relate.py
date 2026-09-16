@@ -105,7 +105,11 @@ elsewhere, it is `extends`.
 - `contradicts` is the most consequential answer and always goes to a human. Use it \
 when it is true, and only then.
 - `target_block_id` is required for corroborates, refines, supersedes, duplicate and \
-contradicts. `target_page_id` is required for new and extends.
+contradicts. `target_page_id` is required for extends.
+- For `new`, name a `target_page_id` only when the claim plainly belongs on that page — \
+it is about the page's subject. If no candidate page is about this, set it to null and a \
+new page is written for it. Never pick the closest of several unrelated pages: a claim \
+filed on the wrong page is harder to find than a new one.
 - For `refines` and `supersedes`, put the existing sentence you are changing in \
 `existing_text`, copied exactly.
 - `confidence` is your confidence in the RELATION, not in the claim.
@@ -222,9 +226,13 @@ def _shortcut(claim: Claim, candidates: list[Candidate], pages: list[PageHit],
     exactly how a system starts making confident wrong edits.
     """
     if not candidates:
-        target = pages[0].page_id if pages else None
+        # No page either. The top page-level hit for a claim that matched no block is
+        # whatever shared the most words with it, not where it belongs: a playlist on
+        # neural networks, sent to a base about sleep and gradient clipping, had every
+        # one of its claims appended to "Gradient clipping". With no page named, the
+        # planner creates one, and the composer writes it.
         return Judgement(claim_id=claim.claim_id, relation=Relation.NEW, confidence=0.9,
-                         target_page_id=target,
+                         target_page_id=None,
                          rationale="nothing in the notes matched this claim",
                          model="heuristic")
 
@@ -348,7 +356,10 @@ def classify_one(claim: Claim, source: Source, index: Index, model: Model, *,
             judgement.target_page_id = next(
                 (c.page_id for c in candidates if c.block_id == judgement.target_block_id),
                 None)
-        elif pages:
+        elif pages and judgement.relation is not Relation.NEW:
+            # `extends` names a page by definition, so a missing one is a slip worth
+            # repairing. `new` with no page is an answer — "nothing here is about this" —
+            # and filling in the top hit overruled it.
             judgement.target_page_id = pages[0].page_id
 
     # Both references exist, and they disagree: the named block lives on a different

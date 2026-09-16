@@ -105,6 +105,19 @@ def _archive_original(archive, source: Source, spec: str, kind: str | None) -> N
         log.warning("could not archive the original file: %s", e)
 
 
+def _default_parent(settings) -> str | None:
+    """Where a page for a claim with no home is created: the first Notion root, or a
+    vault's top level. `None` means nowhere, and such a claim is skipped and recorded."""
+    roots = getattr(settings, "notion_root_pages", ()) or ()
+    if roots:
+        return roots[0]
+    if getattr(settings, "backend", "notion") == "markdown":
+        from palimpsest.workspace.markdown import VAULT_ROOT
+
+        return VAULT_ROOT
+    return None
+
+
 def ingest(spec: str, store, model: Model | None = None, *, settings=None,
            kind: str | None = None, index: Index | None = None,
            archive=None, reuse: bool = True, max_windows: int | None = None,
@@ -218,7 +231,7 @@ def ingest(spec: str, store, model: Model | None = None, *, settings=None,
         min_confidence=getattr(settings, "min_confidence", 0.75),
         record_contradictions=getattr(settings, "autonomy", "none") == "everything",
         footnotes=getattr(settings, "footnotes", True),
-        default_parent=(getattr(settings, "notion_root_pages", ()) or (None,))[0],
+        default_parent=_default_parent(settings),
     )
 
     # -- 6b. lay out any page this source is about to create ------------------
