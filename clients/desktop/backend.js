@@ -30,7 +30,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const IS_WINDOWS = process.platform === "win32";
@@ -71,12 +71,15 @@ export class Backend {
    * @param {string} options.venvDir   where the virtualenv lives
    * @param {string} options.repoRoot  the palimpsest checkout to install from
    * @param {number} options.port
+   * @param {string} [options.dataDir] the directory the server runs in
+   * @param {Record<string, string>} [options.env] extra environment for the server
    * @param {(line: string, level?: string) => void} options.log
    */
-  constructor({ venvDir, repoRoot, port = 8100, env = {}, log = () => {} }) {
+  constructor({ venvDir, repoRoot, port = 8100, dataDir, env = {}, log = () => {} }) {
     this.venvDir = venvDir;
     this.repoRoot = repoRoot;
     this.port = port;
+    this.dataDir = dataDir;
     this.env = env;
     this.log = log;
     this.child = null;
@@ -230,17 +233,35 @@ export class Backend {
     );
   }
 
-  #spawnServer() {
-    const args = ["-m", "palimpsest.cli", "serve", "--port", String(this.port)];
-    this.child = spawn(this.python, args, {
+  /**
+   * Where and with what the server runs.
+   *
+   * The working directory is not a detail. The default database is
+   * `sqlite:///palimpsest.db` and the default archive `file://./archive`, both relative,
+   * and the server used to inherit whatever directory launched the app. From the Start
+   * menu that is the install folder, which an upgrade or an uninstall deletes -- the
+   * mirror, the patch history and every archived source with it. Launched from a shell
+   * it was that shell's directory, where a stray `.env` could quietly supply a second
+   * set of credentials. So the server runs in the app's data directory, and is told
+   * exactly which config file is its own, which also stops it reading `./.env` at all.
+   */
+  serverOptions() {
+    return {
       windowsHide: true,
+      ...(this.dataDir ? { cwd: this.dataDir } : {}),
       env: {
         ...process.env,
         ...this.env,
         PYTHONUNBUFFERED: "1",
         PALIMPSEST_HOST: "127.0.0.1",
       },
-    });
+    };
+  }
+
+  #spawnServer() {
+    const args = ["-m", "palimpsest.cli", "serve", "--port", String(this.port)];
+    if (this.dataDir) mkdirSync(this.dataDir, { recursive: true });
+    this.child = spawn(this.python, args, this.serverOptions());
     this.child.stdout.on("data", (d) => this.log(String(d).trimEnd()));
     this.child.stderr.on("data", (d) => this.log(String(d).trimEnd(), "warn"));
     this.child.on("close", (code) => {

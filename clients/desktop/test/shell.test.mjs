@@ -29,7 +29,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { findPython } from "../backend.js";
+import { Backend, findPython } from "../backend.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = join(HERE, "..");
@@ -212,4 +212,30 @@ test("the shell installs the distribution that exists on PyPI", async () => {
 
   const pyproject = await readFile(join(REPO, "pyproject.toml"), "utf8");
   assert.match(pyproject, /^name = "palimpsest-notion"$/m);
+});
+
+test("the server runs in the app's data directory, not wherever the app was launched", () => {
+  // The default database and archive are relative paths. Inherited from a Start menu
+  // launch they landed in the install folder, which an upgrade deletes; inherited from a
+  // shell, a stray `.env` there supplied a second set of credentials.
+  const backend = new Backend({
+    venvDir: "/app/venv",
+    repoRoot: null,
+    dataDir: "/app/data",
+    env: { PALIMPSEST_CONFIG: "/app/data/config.env" },
+  });
+
+  const options = backend.serverOptions();
+
+  assert.equal(options.cwd, "/app/data");
+  assert.equal(options.env.PALIMPSEST_CONFIG, "/app/data/config.env");
+  assert.equal(options.env.PALIMPSEST_HOST, "127.0.0.1", "never a network interface");
+});
+
+test("the shell passes its data directory and config file to the backend", async () => {
+  const main = await readFile(join(APP, "main.js"), "utf8");
+  const construction = main.slice(main.indexOf("new Backend("), main.indexOf("});", main.indexOf("new Backend(")));
+
+  assert.match(construction, /dataDir:\s*app\.getPath\("userData"\)/);
+  assert.match(construction, /PALIMPSEST_CONFIG:\s*configPath\(\)/);
 });

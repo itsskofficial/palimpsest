@@ -448,6 +448,10 @@ if (!app.requestSingleInstanceLock()) {
       venvDir: join(app.getPath("userData"), "venv"),
       repoRoot: REPO_ROOT,
       port: Number(process.env.PALIMPSEST_PORT || 8100),
+      // The database and archive default to paths relative to the server's directory.
+      // See `Backend.serverOptions` for what went wrong when this was left to chance.
+      dataDir: app.getPath("userData"),
+      env: { PALIMPSEST_CONFIG: configPath() },
       log,
     });
 

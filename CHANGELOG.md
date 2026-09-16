@@ -8,6 +8,21 @@ tool that edits your notes is not a small thing, so those are called out individ
 
 ---
 
+## 0.2.3 — 2026-09-16
+
+### Fixed
+
+- **The desktop app could keep its database in the install folder.** The app's server
+  inherited the directory the app was launched from, and the default database
+  (`palimpsest.db`) and archive (`./archive`) are relative paths. From the Start menu that
+  is the install folder, which an upgrade or uninstall deletes along with the mirror, the
+  change history and every archived source. Launched from a terminal, a `.env` in that
+  directory could also supply a second set of credentials. The server now runs in the app's
+  data directory (`%APPDATA%\palimpsest` on Windows) and reads only the app's own config
+  file.
+
+---
+
 ## 0.2.2 — 2026-09-16
 
 ### Added
