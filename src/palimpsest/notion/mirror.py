@@ -272,6 +272,16 @@ def refresh_pages(client: Workspace, store, page_ids: Iterable[str], *,
             row["summary"] = " ".join(texts)[:400] or None
 
         store.put_pages([row])
+        if row["archived"]:
+            # A page in the trash still returns its children, and storing them as live
+            # blocks kept every one of them a retrieval candidate. Undoing a capture that
+            # created a page did exactly that: the next capture of the same source
+            # "corroborated" 64 claims against the page it had just taken back, tried to
+            # append to it, and Notion refused the whole patch -- "Can't edit block that
+            # is archived". Retiring them all is what the trash means.
+            store.drop_missing_blocks(pid, set())
+            refreshed += 1
+            continue
         if blocks:
             store.put_blocks(blocks)
         # Retire whatever is no longer on the page. `put_blocks` only ever adds and

@@ -8,6 +8,17 @@ tool that edits your notes is not a small thing, so those are called out individ
 
 ---
 
+## 0.2.5 — 2026-09-22
+
+### Fixed
+
+- **Undoing a new page left its text behind as notes.** A page in Notion's trash still
+  returns its blocks, and the mirror stored them as live, so the next capture of the same
+  source matched its claims against the page that had just been undone, tried to write to
+  it, and Notion refused the whole patch. A trashed page's blocks are now retired with it.
+
+---
+
 ## 0.2.4 — 2026-09-22
 
 Found by sending a 77-minute talk through the desktop app.

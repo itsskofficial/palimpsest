@@ -922,3 +922,32 @@ def test_a_captured_selection_can_be_followed_back_to_the_page_it_came_from(stor
     segments = result.source.meta["segments"]
     assert segments and all(s["url"] == "https://example.com/post" for s in segments)
     assert all(c.anchor.url == "https://example.com/post" for c in result.claims)
+
+
+def test_refreshing_a_page_in_the_trash_retires_all_of_its_blocks(store):
+    """Undo archives a page it created, and then refreshes the mirror. A trashed page
+    still returns its children, so they went back in as live blocks: the next capture of
+    the same 77-minute talk "corroborated" 64 claims against the page it had just taken
+    back, appended to it, and Notion refused the whole patch."""
+    from palimpsest.notion.mirror import refresh_pages
+
+    store.put_pages([{"page_id": "pg_trashed", "title": "System Design Interviews",
+                      "last_edited": "1"}])
+    store.put_blocks([{"block_id": "bk_old", "page_id": "pg_trashed",
+                       "type": "paragraph", "position": 0, "text": "an old claim"}])
+
+    class Trashed:
+        def get_page(self, page_id):
+            return {"id": page_id, "in_trash": True, "url": "https://notion.so/x",
+                    "last_edited_time": "2", "parent": {"type": "page_id", "page_id": "pg_root"},
+                    "properties": {"title": {"type": "title", "title": [
+                        {"plain_text": "System Design Interviews"}]}}}
+
+        def block_children(self, block_id):
+            yield {"id": "bk_old", "type": "paragraph", "has_children": False,
+                   "paragraph": {"rich_text": [{"plain_text": "an old claim"}]}}
+
+    assert refresh_pages(Trashed(), store, ["pg_trashed"]) == 1
+
+    assert store.get_blocks("pg_trashed") == []
+    assert all(b["page_id"] != "pg_trashed" for b in store.get_blocks())
