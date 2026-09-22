@@ -16,6 +16,8 @@ tool that edits your notes is not a small thing, so those are called out individ
   returns its blocks, and the mirror stored them as live, so the next capture of the same
   source matched its claims against the page that had just been undone, tried to write to
   it, and Notion refused the whole patch. A trashed page's blocks are now retired with it.
+  So is a page Notion no longer serves at all (`object_not_found`), which is what a
+  trashed page becomes soon after.
 
 ---
 

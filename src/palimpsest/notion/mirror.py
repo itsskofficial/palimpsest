@@ -245,6 +245,15 @@ def refresh_pages(client: Workspace, store, page_ids: Iterable[str], *,
             page = client.get_page(pid)
             blocks = _collect_blocks(client, pid, pid)
         except NotionError as e:
+            known = store.get_page(pid) if e.code == "object_not_found" else None
+            if known is not None:
+                # Gone from where the integration can see it: deleted, or trashed past the
+                # point Notion still serves it. Either way nothing in it can be written to,
+                # so it leaves retrieval, the same as a page in the trash.
+                store.put_pages([{**known, "archived": True}])
+                store.drop_missing_blocks(pid, set())
+                refreshed += 1
+                continue
             log.warning("could not refresh %s in the mirror: %s %s", pid[:8], e.code,
                         e.message[:120])
             continue

@@ -951,3 +951,24 @@ def test_refreshing_a_page_in_the_trash_retires_all_of_its_blocks(store):
 
     assert store.get_blocks("pg_trashed") == []
     assert all(b["page_id"] != "pg_trashed" for b in store.get_blocks())
+
+
+def test_refreshing_a_page_that_is_gone_retires_it_too(store):
+    """Notion stops serving a trashed page after a while ("object_not_found"), and a page
+    the mirror still holds as live then stays a retrieval candidate forever."""
+    from palimpsest.notion.client import NotionError
+    from palimpsest.notion.mirror import refresh_pages
+
+    store.put_pages([{"page_id": "pg_gone", "title": "System Design Interviews",
+                      "last_edited": "1"}])
+    store.put_blocks([{"block_id": "bk_old", "page_id": "pg_gone",
+                       "type": "paragraph", "position": 0, "text": "an old claim"}])
+
+    class Gone:
+        def get_page(self, page_id):
+            raise NotionError(404, "object_not_found", "Could not find block")
+
+    assert refresh_pages(Gone(), store, ["pg_gone"]) == 1
+
+    assert store.get_blocks("pg_gone") == []
+    assert store.get_page("pg_gone")["archived"]
