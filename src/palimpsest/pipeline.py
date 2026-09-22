@@ -278,7 +278,7 @@ def _compose_new_pages(planned: PlanResult, claims_by_id: dict, source: Source,
         return
 
     t0 = time.perf_counter()
-    laid_out = 0
+    laid_out = sections = fallback = 0
     for op in creations:
         ids = [op.claim_id, *(op.payload.get("merged_claims") or [])]
         claims = [claims_by_id[i] for i in ids if i in claims_by_id]
@@ -287,7 +287,7 @@ def _compose_new_pages(planned: PlanResult, claims_by_id: dict, source: Source,
             # a model call to produce the same single sentence.
             continue
         try:
-            result = composer.compose_page(claims, source, model, effort=effort)
+            result = composer.compose_sections(claims, source, model, effort=effort)
         except Exception as e:
             log.warning("could not compose a page for %s: %s", op.op_id, e)
             continue
@@ -298,7 +298,10 @@ def _compose_new_pages(planned: PlanResult, claims_by_id: dict, source: Source,
         op.payload.update(children=result.children, title=result.title,
                           icon=result.icon, summary=result.summary, composed=True)
         laid_out += 1
+        sections += getattr(result, "sections", 1)
+        fallback += getattr(result, "fallback_sections", 0)
 
     if laid_out:
         stages["compose"] = {"seconds": round(time.perf_counter() - t0, 2),
-                             "pages": laid_out}
+                             "pages": laid_out, "sections": sections,
+                             "fallback_sections": fallback}

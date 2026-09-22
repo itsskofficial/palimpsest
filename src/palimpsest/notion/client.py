@@ -19,6 +19,7 @@ This client paces itself with a token bucket and honours `Retry-After`.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -272,11 +273,35 @@ class NotionClient:
                 "title": {"title": [{"type": "text", "text": {"content": title[:2000]}}]}
             },
         }
-        if children:
-            body["children"] = children[:MAX_APPEND]
         if icon:
             body["icon"] = {"type": "emoji", "emoji": icon}
-        return self._request("POST", "pages", body)
+        return self._create(body, children)
+
+    def _create(self, body: dict, children: list[dict] | None) -> dict:
+        """POST a page, then append whatever did not fit in the create.
+
+        Notion takes at most 100 children on create. Both creators used to send the
+        first 100 and discard the rest without a word: a 77-minute talk produced 183
+        claims, the page they became needed 366 blocks, and 133 of the claims vanished
+        while the job reported success.
+        """
+        children = list(children or [])
+        if children:
+            body["children"] = children[:MAX_APPEND]
+        page = self._request("POST", "pages", body)
+        rest = children[MAX_APPEND:]
+        if rest:
+            page_id = page.get("id") or ""
+            try:
+                for start in range(0, len(rest), MAX_APPEND):
+                    self.append_children(page_id, rest[start:start + MAX_APPEND])
+            except Exception:
+                # Half a page is worse than none, and the caller only records an inverse
+                # for a create that returned -- so take it back before reporting failure.
+                with contextlib.suppress(Exception):
+                    self.archive_page(page_id)
+                raise
+        return page
 
     def archive_page(self, page_id: str, *, restore: bool = False) -> dict:
         """Move a page to the trash, or bring it back.
@@ -364,11 +389,9 @@ class NotionClient:
             "parent": {"type": "data_source_id", "data_source_id": data_source_id},
             "properties": properties,
         }
-        if children:
-            body["children"] = children[:MAX_APPEND]
         if icon:
             body["icon"] = {"type": "emoji", "emoji": icon}
-        return self._request("POST", "pages", body)
+        return self._create(body, children)
 
     def query_data_source(self, data_source_id: str, filter_: dict | None = None,
                           sorts: list[dict] | None = None) -> Iterator[dict]:

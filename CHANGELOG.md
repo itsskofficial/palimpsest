@@ -8,6 +8,29 @@ tool that edits your notes is not a small thing, so those are called out individ
 
 ---
 
+## 0.2.4 — 2026-09-22
+
+Found by sending a 77-minute talk through the desktop app.
+
+### Fixed
+
+- **Pages longer than 100 blocks lost everything past the hundredth.** Notion accepts at
+  most 100 blocks when a page is created, and the rest were discarded without a word. The
+  talk produced 183 claims; the page kept 50 of them and the capture reported success.
+  The remainder is now appended in batches, and if that fails the half-built page is taken
+  back rather than left behind. Database rows had the same limit and the same fix.
+- **Long sources fell back to a page of one-line bullets.** One composition call for 183
+  claims came back unusable. Long pages are now written in ordered parts of 40 claims, each
+  a set of sections of the same page; a part that fails becomes cited bullets on its own,
+  without costing the rest.
+
+### Changed
+
+- **Extraction reads a long source's windows at the same time**, four at once, and merges
+  them in source order. The talk's eight windows took nearly four minutes one after another.
+
+---
+
 ## 0.2.3 — 2026-09-16
 
 ### Fixed

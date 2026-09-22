@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from palimpsest.ingest import anchor_for
@@ -39,6 +40,10 @@ log = logging.getLogger("palimpsest.extract")
 #: one enormous request whose recall collapses in the middle.
 WINDOW = 12_000
 OVERLAP = 800
+
+#: Windows extracted at once. The work is waiting on HTTP, and four stays well inside
+#: every provider's burst allowance while cutting a long source's extraction by ~4x.
+EXTRACT_WORKERS = 4
 
 SYSTEM = """\
 You extract atomic factual claims from source material for a personal knowledge base.
@@ -192,10 +197,9 @@ def extract(source: Source, model: Model, *, effort: str = "medium",
     prefix = (f"SOURCE\ntitle: {source.title}\nkind: {source.kind}\n"
               f"url: {source.url or '(local)'}\n")
 
-    seen: set[str] = set()
-    for offset, window in windows:
+    def ask(window: str) -> dict | ModelError:
         try:
-            payload = model.json(
+            return model.json(
                 task="extract",
                 system=SYSTEM,
                 prompt=f"{prefix}\nSOURCE TEXT\n{window}\n\nExtract the atomic claims.",
@@ -203,7 +207,19 @@ def extract(source: Source, model: Model, *, effort: str = "medium",
                 effort=effort,
             )
         except ModelError as e:
-            result.errors.append(str(e))
+            return e
+
+    # Concurrently, then merged in window order. A 77-minute talk is eight windows, and
+    # asked one after another they took nearly four minutes of a capture's eight. The
+    # order is kept for the merge because the overlap between windows repeats claims, and
+    # which copy survives has to be the same on every run.
+    with ThreadPoolExecutor(max_workers=max(1, min(EXTRACT_WORKERS, len(windows)))) as pool:
+        answers = list(pool.map(ask, [w for _, w in windows]))
+
+    seen: set[str] = set()
+    for (offset, window), payload in zip(windows, answers, strict=True):
+        if isinstance(payload, ModelError):
+            result.errors.append(str(payload))
             continue
 
         for raw in payload.get("claims", []):

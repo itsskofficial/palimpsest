@@ -1,7 +1,7 @@
 {
   "name": "palimpsest-desktop",
   "productName": "palimpsest",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "A knowledge base that rewrites itself. Capture anything; approve what changes.",
   "homepage": "https://github.com/itsskofficial/palimpsest",

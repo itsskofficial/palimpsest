@@ -36,7 +36,8 @@ from palimpsest.llm import Model
 from palimpsest.notion import blocks as B
 from palimpsest.types import Claim, Operation, OpKind, Relation, Source
 
-__all__ = ["ComposeResult", "compose_page", "rewrite_page"]
+__all__ = ["COMPOSE_GROUP", "ComposeResult", "compose_page", "compose_sections",
+           "rewrite_page"]
 
 log = logging.getLogger("palimpsest.compose")
 
@@ -107,6 +108,9 @@ class ComposeResult:
         self.children = children
         self.covered = covered
         self.missing = missing
+        #: How many composition calls wrote it, and how many of those fell back to bullets.
+        self.sections = 1
+        self.fallback_sections = 0
 
     @property
     def ok(self) -> bool:
@@ -118,7 +122,8 @@ class ComposeResult:
 
 
 def compose_page(claims: list[Claim], source: Source, model: Model, *,
-                 effort: str = "high", existing: str | None = None) -> ComposeResult:
+                 effort: str = "high", existing: str | None = None,
+                 part: tuple[int, int] | None = None) -> ComposeResult:
     """Ask the model to lay out a page for these claims.
 
     `existing` is the current text of a page being rewritten, so the composer can keep
@@ -137,6 +142,15 @@ def compose_page(claims: list[Claim], source: Source, model: Model, *,
             "THE PAGE AS IT STANDS. Keep what is worth keeping and fold the claims in; "
             "do not throw this away and write only the new material.\n"
             f"{existing[:6000]}\n\n")
+    if part is not None:
+        n, total = part
+        prompt += (
+            f"This is PART {n} OF {total} of one page, in the order the source presents "
+            "it. Write only this part's sections, starting with a heading_2 that names what "
+            "this part covers. "
+            + ("Open with one or two sentences saying what the whole topic is. "
+               if n == 1 else "Do not repeat an opening; the page already has one. ")
+            + "`title` and `icon` describe the whole page.\n\n")
     prompt += "Lay out the page."
 
     payload = model.json(task="compose", system=SYSTEM, prompt=prompt, schema=SCHEMA,
@@ -169,9 +183,10 @@ def compose_page(claims: list[Claim], source: Source, model: Model, *,
         children = []
 
     # After, not before: a composition that produced nothing must still come back empty,
-    # rather than as a page holding only the line that says where it came from.
+    # rather than as a page holding only the line that says where it came from. A part of a
+    # longer page leaves it to the caller, which adds it once at the end.
     source_line = _source_block(source)
-    if source_line and children:
+    if source_line and children and part is None:
         children += B.blocks_from_spec([source_line])
 
     return ComposeResult(
@@ -182,6 +197,73 @@ def compose_page(claims: list[Claim], source: Source, model: Model, *,
         covered=covered,
         missing=wanted - covered,
     )
+
+
+#: Claims per composition call. One call laying out a whole long source -- 183 claims
+#: from a 77-minute talk -- has to emit every block of the page in a single response, and
+#: it came back unusable, so the page fell back to 183 one-line bullets. Composed in parts
+#: of this size, in source order, each part is a response the model writes well, and a
+#: part that fails costs only its own sections.
+COMPOSE_GROUP = 40
+
+
+def compose_sections(claims: list[Claim], source: Source, model: Model, *,
+                     effort: str = "high", group: int = COMPOSE_GROUP) -> ComposeResult:
+    """Lay out a page of any length, in parts, as one page.
+
+    Short sources take one call, exactly as before. Longer ones are split in the order the
+    source presents them, each part composed as sections of the same page, and joined. A
+    part that fails, or drops a claim, falls back to cited bullets for that part alone --
+    the rest of the page is still written properly, and no claim is lost either way.
+    """
+    ordered = sorted(claims, key=lambda c: (c.anchor.start or 0) if c.anchor else 0)
+    if len(ordered) <= group:
+        result = compose_page(ordered, source, model, effort=effort)
+        result.sections, result.fallback_sections = 1, 0 if result.ok else 1
+        return result
+
+    parts = [ordered[i:i + group] for i in range(0, len(ordered), group)]
+    children: list[dict] = []
+    title = icon = summary = None
+    fell_back = 0
+    for n, part in enumerate(parts, start=1):
+        piece: ComposeResult | None
+        try:
+            piece = compose_page(part, source, model, effort=effort,
+                                  part=(n, len(parts)))
+        except Exception as e:
+            log.warning("could not compose part %d of %d: %s", n, len(parts), e)
+            piece = None
+        if piece is not None and piece.ok:
+            children.extend(piece.children)
+            title = title or piece.title
+            icon = icon or piece.icon
+            summary = summary or piece.summary
+        else:
+            fell_back += 1
+            children.extend(_bullets(part, source))
+
+    source_line = _source_block(source)
+    if source_line:
+        children += B.blocks_from_spec([source_line])
+
+    composed = ComposeResult(
+        title=(title or source.title or "Untitled")[:120],
+        icon=icon or "\U0001f331",
+        summary=summary or "",
+        children=children,
+        covered={c.claim_id for c in ordered},
+        missing=set(),
+    )
+    composed.sections, composed.fallback_sections = len(parts), fell_back
+    return composed
+
+
+def _bullets(claims: list[Claim], source: Source) -> list[dict]:
+    """The fallback for one part: each claim a bullet, carrying its own citation."""
+    return B.blocks_from_spec([
+        {"type": "bulleted_list_item", "text": c.text, "_cite": _citations([c], source)}
+        for c in claims])
 
 
 #: How many citation markers one block carries. A paragraph folding eight claims from
